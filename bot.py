@@ -49,12 +49,18 @@ async def get_day(d: date, force: bool = False) -> S.DayData:
 
 
 async def send_long(bot, chat_id: int, text: str, reply_markup=None):
-    chunks, cur = [], ""
+    # Telegram 4096 belgidan uzun xabarni qabul qilmaydi — bo'laklarga bo'lamiz.
+    # <pre> jadval ikkiga bo'linsa, teglar buzilmasligi uchun yopib/qayta ochamiz.
+    chunks, cur, in_pre = [], "", False
     for line in text.split("\n"):
         if len(cur) + len(line) + 1 > 3800:
-            chunks.append(cur)
-            cur = ""
+            chunks.append(cur + ("</pre>" if in_pre else ""))
+            cur = "<pre>" if in_pre else ""
         cur += line + "\n"
+        if "<pre>" in line:
+            in_pre = True
+        if "</pre>" in line:
+            in_pre = False
     if cur.strip():
         chunks.append(cur)
     for k, ch in enumerate(chunks):

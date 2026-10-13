@@ -346,40 +346,43 @@ def reasons(day: DayData, s: SellerDay, done: list[int], fdone: float, upto: dat
         out.append(f"gaplashgani {fmt_dur(tot.talk_sec)}, kerak edi {fmt_dur(int(nm * 60))} "
                    f"(<b>{fmt_dur(int(nm * 60) - tot.talk_sec)} kam</b>)")
     if tot.dozvon < nd:
-        out.append(f"dozvon {tot.dozvon} ta, kerak edi {nd} ta")
+        out.append(f"ulangan qo'ng'iroq {tot.dozvon} ta, kerak edi {nd} ta")
     g0, g1, gs = longest_gap(day, s, upto)
     if gs >= 45 * 60:
         out.append(f"{g0:%H:%M}–{g1:%H:%M} orasida {fmt_dur(gs)} qo'ng'iroq qilmagan")
     if tot.attempts >= 10 and tot.dozvon / tot.attempts < 0.25:
-        out.append(f"{tot.attempts} ta terdi, faqat {tot.dozvon} tasi ulandi")
+        out.append(f"{tot.attempts} ta qo'ng'iroq qildi, faqat {tot.dozvon} tasiga mijoz javob berdi")
     return out[:3]
+
+
+LINE = "━━━━━━━━━━━━━━━━━━━━"
 
 
 def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: str,
                   final: bool = False, recent_live: bool = False,
                   flags: list | None = None) -> str:
-    lvl_min = C.LEVELS[-1]
-    norm = f"Norma: 1 soatda <b>{lvl_min[2]} daq</b> gaplashish + <b>{lvl_min[3]} dozvon</b>"
+    wd = WEEKDAYS[day.day.weekday()]
     if final:
-        head = f"🏁 <b>{escape(title)}</b> · {day.day:%d.%m} — <b>KUN YAKUNI</b>"
+        lines = [f"🏁 <b>KUN YAKUNI · {escape(title)}</b>",
+                 f"📅 {day.day:%d.%m.%Y}, {wd} · ish vaqti {C.WORK_START:%H:%M}–{C.WORK_END:%H:%M}"]
     else:
-        head = f"📊 <b>{escape(title)}</b> · {day.day:%d.%m} · <b>{now:%H:%M}</b>"
-    lines = [head, norm]
+        lines = [f"📊 <b>HOLAT · {escape(title)}</b>",
+                 f"📅 {day.day:%d.%m.%Y}, {wd} · soat <b>{now:%H:%M}</b> holatiga"]
     if not day.slots:
-        return "\n".join(lines + ["Ish vaqti sozlanmagan."])
+        return "\n".join(lines + ["", "Ish vaqti sozlanmagan."])
 
     done = [i for i, sl in enumerate(day.slots) if sl.state(now) == "done"]
     live = next((i for i, sl in enumerate(day.slots) if sl.state(now) == "live"), None)
     if not done and live is None:
-        return "\n".join(lines + [f"Ish kuni hali boshlanmadi ({day.slots[0].start:%H:%M})."])
+        return "\n".join(lines + ["", f"Ish kuni hali boshlanmadi ({day.slots[0].start:%H:%M})."])
     if not sellers:
         return "\n".join(lines + ["", "Bu jamoada bugun qo'ng'iroqlar yo'q."])
 
     fdone = sum(day.slots[i].factor for i in done)
     upto = day.slots[done[-1]].end if done else now
-
-    # "Soat" ustuni: oxirgi 60 daqiqa (2 ta 30 daqiqalik bo'lak)
     pool = done + ([live] if (recent_live and live is not None) else [])
+
+    # "Oxirgi soat" ustuni: oxirgi 60 daqiqa (2 ta 30 daqiqalik bo'lak)
     hidx = pool[-2:] if pool else None
     show_hour = bool(hidx) and not final
     if show_hour:
@@ -389,25 +392,15 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
     rows = []
     for s in sellers:
         g = grade(total(s.buckets[i] for i in done), fdone) if fdone > 0 else LIVE
-        tot = total(s.buckets[i] for i in pool)   # ko'rsatish: hozirgacha hammasi
-        rows.append((g or LIVE, s, tot))
+        rows.append((g or LIVE, s, total(s.buckets[i] for i in pool)))
     rows.sort(key=lambda x: (RANK.get(x[0], 9), -x[2].talk_sec))
 
-    lines.append("")
-    legend = ["<b>Jadvalni o'qish:</b>",
-              "• <b>Vaqt</b> — telefonda gaplashgan vaqti (soat:daqiqa)",
-              "• <b>Qo'ng</b> — jami qilgan qo'ng'iroqlari soni"]
-    if show_hour:
-        legend.append(f"• <b>Oxirgi soat</b> — {hl} oralig'idagi natija")
-    else:
-        legend.append("• <b>Ulandi</b> — mijoz javob bergan qo'ng'iroqlar (dozvon)")
-    lines += legend
-
+    # ---------- 1. Jadval ----------
     if show_hour:
         tbl = ["    " + "Bugun".center(11) + " │ " + "Oxirgi soat",
-               "  " + " №" + " " + "Vaqt" + " " + "Qo'ng" + " │ " + "Vaqt" + " " + "Qo'ng" + "  Xodim"]
+               "   № Vaqt Qo'ng │ Vaqt Qo'ng  Xodim"]
     else:
-        tbl = ["  " + " №" + " " + "Vaqt" + " " + "Qo'ng" + " " + "Ulandi" + "  Xodim"]
+        tbl = ["   № Vaqt Qo'ng Ulandi  Xodim"]
     cnt = Counter()
     for n, (g, s, tot) in enumerate(rows, 1):
         cnt[g] += 1
@@ -418,38 +411,57 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
                        f"{hm(hb.talk_sec):>4} {hb.attempts:>5}  {nm}")
         else:
             tbl.append(f"{g}{n:>2} {hm(tot.talk_sec):>4} {tot.attempts:>5} {tot.dozvon:>6}  {nm}")
-    lines.append("<pre>" + "\n".join(tbl) + "</pre>")
+    lines += ["", "<pre>" + "\n".join(tbl) + "</pre>"]
 
-    order = [C.LEVELS[0][0], C.LEVELS[1][0], C.LOW[0], LIVE]
+    # ---------- 2. Umumiy natija ----------
     label = {C.LEVELS[0][0]: "yaxshi", C.LEVELS[1][0]: "minimal", C.LOW[0]: "normadan past",
-             LIVE: "baholanmoqda"}
-    lines.append("Natija: " + " · ".join(f"{e} {cnt[e]} {label[e]}" for e in order if cnt[e]))
+             LIVE: "hali baholanmagan"}
+    order = [C.LEVELS[0][0], C.LEVELS[1][0], C.LOW[0], LIVE]
+    team_tot = total(t for _, _, t in rows)
+    lines += [f"👥 {len(rows)} xodim: " + " · ".join(f"{e} {cnt[e]} {label[e]}" for e in order if cnt[e]),
+              f"📞 Jamoa bo'yicha: {fmt_dur(team_tot.talk_sec)} gaplashildi, "
+              f"{team_tot.attempts} qo'ng'iroq, {team_tot.dozvon} ulandi"]
 
-    # Eng yomonlar — aniq sabab bilan
-    bad = [(g, s, tot) for g, s, tot in rows if g == C.LOW[0]]
-    bad.sort(key=lambda x: x[2].talk_sec)
-    limit = 5 if final else 3
-    if bad and fdone > 0:
-        lines += ["", f"🔻 <b>Eng past natija</b> ({len(bad)} kishidan {min(limit, len(bad))} tasi):"]
-        for s_ in bad[:limit]:
-            _, s, _ = s_
-            rs = reasons(day, s, done, fdone, upto)
-            lines.append(f"<b>{escape(s.name)}</b>")
-            lines += [f"   • {r}" for r in rs]
-    elif fdone > 0:
-        lines += ["", "✅ Normadan past xodim yo'q."]
-
+    # ---------- 3. 1 mijoz bilan uzoq suhbat ----------
     if flags is None:   # yakuniy hisobotda — hammasi
         flags = [(s, ph, cs, t) for s in sellers for ph, cs, t in long_clients(s)]
+    flags = [f for f in flags if f[0].uid not in EXCLUDED]
     if flags:
-        lines += ["", f"⚠️ <b>1 mijoz bilan {C.LONG_CLIENT_MIN}+ daq</b> (sababini so'rang):"]
+        lines += ["", LINE, f"⚠️ <b>1 MIJOZ BILAN {C.LONG_CLIENT_MIN}+ DAQIQA</b> — sababini so'rang:"]
         for s, ph, cs, t in sorted(flags, key=lambda x: -x[3])[:5]:
             link = next((_links(c) for c in cs if _links(c)), "")
-            lines.append(f"• {escape(s.name)} → {fmt_phone(ph)}: {fmt_dur(t)}"
+            lines.append(f"• {escape(s.name)} → {fmt_phone(ph)}: <b>{fmt_dur(t)}</b>"
                          + (f" · {link}" if link else ""))
         if len(flags) > 5:
             lines.append(f"  … yana {len(flags) - 5} ta")
-    lines += ["", "<i>Batafsil (soatma-soat, har qo'ng'iroq): 👤 Sotuvchi tugmasi</i>"]
+
+    # ---------- 4. Eng past natija (e'lon) ----------
+    bad = sorted([(s, t) for g, s, t in rows if g == C.LOW[0]], key=lambda x: x[1].talk_sec)
+    limit = 5 if final else 3
+    lines += ["", LINE]
+    if bad and fdone > 0:
+        lines.append(f"🔻 <b>ENG PAST NATIJA</b> — {len(bad)} kishidan {min(limit, len(bad))} tasi:")
+        for k, (s, t) in enumerate(bad[:limit], 1):
+            lines += ["", f"{k}. 🔴 <b>{escape(s.name)}</b> — {fmt_dur(t.talk_sec)}, {t.attempts} qo'ng'iroq"]
+            lines += [f"    • {r}" for r in reasons(day, s, done, fdone, upto)]
+    elif fdone > 0:
+        lines.append("✅ <b>Normadan past xodim yo'q.</b> Barakalla!")
+    else:
+        lines.append("⏳ Birinchi 30 daqiqa tugagach baholanadi.")
+
+    # ---------- 5. Izoh (eng pastda) ----------
+    g_, y_ = C.LEVELS[0], C.LEVELS[1]
+    lines += ["", LINE, "<b>ℹ️ Belgilar ma'nosi</b> (1 soat uchun norma):",
+              f"{g_[0]} <b>Yaxshi</b> — {g_[2]}+ daqiqa gaplashgan va {g_[3]}+ ta ulangan qo'ng'iroq",
+              f"{y_[0]} <b>Minimal</b> — {y_[2]}+ daqiqa gaplashgan va {y_[3]}+ ta ulangan qo'ng'iroq",
+              f"{C.LOW[0]} <b>Normadan past</b> — {y_[2]} daqiqadan kam yoki {y_[3]} tadan kam ulangan",
+              f"{LIVE} hali baholanmagan (vaqt tugamagan)",
+              "",
+              "<b>Vaqt</b> — telefonda gaplashgan vaqti (soat:daqiqa) · "
+              "<b>Qo'ng</b> — qilgan qo'ng'iroqlari soni · "
+              + (f"<b>Oxirgi soat</b> — {hl} oralig'i" if show_hour
+                 else f"<b>Ulandi</b> — mijoz javob bergan ({C.DOZVON_MIN_SEC}+ soniya) qo'ng'iroqlar"),
+              "<i>Batafsil (soatma-soat, har bir qo'ng'iroq): 👤 Sotuvchi tugmasi</i>"]
     return "\n".join(lines)
 
 
