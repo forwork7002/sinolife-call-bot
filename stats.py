@@ -300,15 +300,66 @@ def flags_block(items: list[tuple[SellerDay, str, list[Call], int]]) -> list[str
 
 # ================= hisobotlar =================
 
+def short_name(name: str, width: int = 11) -> str:
+    """"Dilnoza Karimova" -> "Dilnoza K." (jadvalga sig'ishi uchun)."""
+    p = name.split()
+    s = p[0] + (f" {p[1][0]}." if len(p) > 1 and p[1] else "") if p else name
+    return s if len(s) <= width else s[:width - 1] + "…"
+
+
+def hm(sec: int) -> str:
+    """Soniya -> "1:05" (soat:daqiqa)."""
+    m = int(sec) // 60
+    return f"{m // 60}:{m % 60:02d}"
+
+
+def longest_gap(day: DayData, s: SellerDay, upto: datetime):
+    """Ish vaqtida eng uzun 'qo'ng'iroqsiz' oraliq (tushlik hisobga olinmaydi): (boshi, oxiri, soniya)."""
+    start = day.slots[0].start
+    upto = min(upto, day.slots[-1].end)
+    lunch = [(sl.start, sl.end) for sl in day.slots if sl.lunch]
+    busy = sorted((c.start, c.start + timedelta(seconds=c.duration)) for c in s.calls if c.start < upto)
+    best, cur = (start, start, 0), start
+    for b0, b1 in busy + [(upto, upto)]:
+        if b0 > cur:
+            gap = (b0 - cur).total_seconds()
+            gap -= sum(max(0.0, (min(b0, le) - max(cur, ls)).total_seconds()) for ls, le in lunch)
+            if gap > best[2]:
+                best = (cur, b0, int(gap))
+        cur = max(cur, b1)
+    return best
+
+
+def reasons(day: DayData, s: SellerDay, done: list[int], fdone: float, upto: datetime) -> list[str]:
+    """Nega past baho — aniq, raqamli sabablar (eng muhimi birinchi)."""
+    tot = total(s.buckets[i] for i in done)
+    if tot.attempts == 0:
+        return ["bugun birorta ham qo'ng'iroq yo'q"]
+    nm, nd = need(C.LEVELS[-1][2], C.LEVELS[-1][3], fdone)
+    out = []
+    if tot.talk_sec < nm * 60:
+        out.append(f"gaplashgani {hm(tot.talk_sec)}, kerak edi {hm(int(nm * 60))} "
+                   f"(<b>{hm(int(nm * 60) - tot.talk_sec)} kam</b>)")
+    if tot.dozvon < nd:
+        out.append(f"dozvon {tot.dozvon} ta, kerak edi {nd} ta")
+    g0, g1, gs = longest_gap(day, s, upto)
+    if gs >= 45 * 60:
+        out.append(f"{g0:%H:%M}–{g1:%H:%M} orasida {fmt_dur(gs)} qo'ng'iroq qilmagan")
+    if tot.attempts >= 10 and tot.dozvon / tot.attempts < 0.25:
+        out.append(f"{tot.attempts} ta terdi, faqat {tot.dozvon} tasi ulandi")
+    return out[:3]
+
+
 def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: str,
                   final: bool = False, recent_live: bool = False,
                   flags: list | None = None) -> str:
-    wd = WEEKDAYS[day.day.weekday()]
+    lvl_min = C.LEVELS[-1]
+    norm = f"Norma: 1 soatda <b>{lvl_min[2]} daq</b> gaplashish + <b>{lvl_min[3]} dozvon</b>"
     if final:
-        head = f"🏁 <b>{escape(title)}</b> · {day.day:%d.%m.%Y} ({wd}) — kun yakuni"
+        head = f"🏁 <b>{escape(title)}</b> · {day.day:%d.%m} — <b>KUN YAKUNI</b>"
     else:
-        head = f"📊 <b>{escape(title)}</b> · {day.day:%d.%m} ({wd}) · <b>{now:%H:%M}</b> holati"
-    lines = [head, NORM_LINE]
+        head = f"📊 <b>{escape(title)}</b> · {day.day:%d.%m} · <b>{now:%H:%M}</b>"
+    lines = [head, norm]
     if not day.slots:
         return "\n".join(lines + ["Ish vaqti sozlanmagan."])
 
@@ -316,53 +367,74 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
     live = next((i for i, sl in enumerate(day.slots) if sl.state(now) == "live"), None)
     if not done and live is None:
         return "\n".join(lines + [f"Ish kuni hali boshlanmadi ({day.slots[0].start:%H:%M})."])
+    if not sellers:
+        return "\n".join(lines + ["", "Bu jamoada bugun qo'ng'iroqlar yo'q."])
 
     fdone = sum(day.slots[i].factor for i in done)
-    if fdone > 0:
-        nm, nd = need(C.LEVELS[-1][2], C.LEVELS[-1][3], fdone)
-        lines.append(f"Baho {day.slots[0].start:%H:%M}–{day.slots[done[-1]].end:%H:%M} "
-                     f"({_num(fdone)} soat) bo'yicha → minimal <b>{_num(nm)} daq + {nd} dozvon</b>")
-    lines.append("")
+    upto = day.slots[done[-1]].end if done else now
 
-    if not sellers:
-        return "\n".join(lines + ["Bu jamoada bugun qo'ng'iroqlar yo'q."])
-
-    r = live if (recent_live and live is not None) else (done[-1] if done and not final else None)
-    rlabel = "hozirgi 30 daq" if (r is not None and r == live) else "oxirgi 30 daq"
+    # "Soat" ustuni: oxirgi 60 daqiqa (2 ta 30 daqiqalik bo'lak)
+    pool = done + ([live] if (recent_live and live is not None) else [])
+    hidx = pool[-2:] if pool else None
+    show_hour = bool(hidx) and not final
+    if show_hour:
+        h_end = now if (recent_live and live in hidx) else day.slots[hidx[-1]].end
+        hl = f"{day.slots[hidx[0]].start:%H:%M}–{h_end:%H:%M}"
 
     rows = []
     for s in sellers:
-        g = grade(total(s.buckets[i] for i in done), fdone) if fdone > 0 else None
-        rows.append((g or LIVE, s))
-    rows.sort(key=lambda x: (RANK.get(x[0], 9), -total(x[1].buckets).talk_sec))
+        g = grade(total(s.buckets[i] for i in done), fdone) if fdone > 0 else LIVE
+        tot = total(s.buckets[i] for i in pool)   # ko'rsatish: hozirgacha hammasi
+        rows.append((g or LIVE, s, tot))
+    rows.sort(key=lambda x: (RANK.get(x[0], 9), -x[2].talk_sec))
 
+    lines.append("")
+    if show_hour:
+        lines.append(f"<i>Jami — bugun · Soat — {hl} · Q — qo'ng'iroq soni</i>")
+        tbl = ["   № " + "Ism".ljust(11) + " " + "Jami".rjust(5) + "  Q │ Soat  Q"]
+    else:
+        lines.append("<i>Gap — gaplashgan vaqti · Q — qo'ng'iroq · Dz — dozvon</i>")
+        tbl = ["   № " + "Ism".ljust(11) + "  " + "Gap".rjust(5) + "   Q  Dz"]
     cnt = Counter()
-    for n, (g, s) in enumerate(rows, 1):
+    for n, (g, s, tot) in enumerate(rows, 1):
         cnt[g] += 1
-        tot = total(s.buckets)
-        lines.append(f"{g} {n}. <b>{escape(s.name)}</b> — {fmt_dur(tot.talk_sec)} · "
-                     f"{tot.dozvon} dozvon · {tot.attempts} qo'ng'iroq")
-        parts = []
-        if (marks := hour_marks(day, s, now)):
-            parts.append(f"soatlar: {marks}")
-        if r is not None:
-            b = s.buckets[r]
-            if day.slots[r].lunch:
-                parts.append(f"{rlabel}: {LUNCH} tushlik")
-            elif b.attempts == 0:
-                parts.append(f"{rlabel}: ❗ qo'ng'iroq yo'q")
-            else:
-                parts.append(f"{rlabel}: {b.talk_sec // 60} daq, {b.dozvon} dz")
-        if parts:
-            lines.append("      " + " · ".join(parts))
+        nm = escape(short_name(s.name)).ljust(11)
+        if show_hour:
+            hb = total(s.buckets[i] for i in hidx)
+            tbl.append(f"{g}{n:>2} {nm} {hm(tot.talk_sec):>5} {tot.attempts:>2} │ "
+                       f"{hm(hb.talk_sec):>4} {hb.attempts:>2}")
+        else:
+            tbl.append(f"{g}{n:>2} {nm}  {hm(tot.talk_sec):>5} {tot.attempts:>3} {tot.dozvon:>3}")
+    lines.append("<pre>" + "\n".join(tbl) + "</pre>")
 
     order = [C.LEVELS[0][0], C.LEVELS[1][0], C.LOW[0], LIVE]
-    lines += ["", "Natija: " + "  ".join(f"{e} {cnt[e]}" for e in order if cnt[e])]
+    lines.append("  ".join(f"{e} {cnt[e]}" for e in order if cnt[e]))
+
+    # Eng yomonlar — aniq sabab bilan
+    bad = [(g, s, tot) for g, s, tot in rows if g == C.LOW[0]]
+    bad.sort(key=lambda x: x[2].talk_sec)
+    limit = 5 if final else 3
+    if bad and fdone > 0:
+        lines += ["", f"🔻 <b>Eng past natija</b> ({len(bad)} kishidan {min(limit, len(bad))} tasi):"]
+        for s_ in bad[:limit]:
+            _, s, _ = s_
+            rs = reasons(day, s, done, fdone, upto)
+            lines.append(f"<b>{escape(s.name)}</b>")
+            lines += [f"   • {r}" for r in rs]
+    elif fdone > 0:
+        lines += ["", "✅ Normadan past xodim yo'q."]
 
     if flags is None:   # yakuniy hisobotda — hammasi
         flags = [(s, ph, cs, t) for s in sellers for ph, cs, t in long_clients(s)]
-    lines += flags_block(flags)
-    lines += ["", "<i>Ma'lumot: Bitrix24 telefoniyasi. Isbot: 👤 Sotuvchi → 📞 qo'ng'iroqlar ro'yxati</i>"]
+    if flags:
+        lines += ["", f"⚠️ <b>1 mijoz bilan {C.LONG_CLIENT_MIN}+ daq</b> (sababini so'rang):"]
+        for s, ph, cs, t in sorted(flags, key=lambda x: -x[3])[:5]:
+            link = next((_links(c) for c in cs if _links(c)), "")
+            lines.append(f"• {escape(short_name(s.name, 16))} → {fmt_phone(ph)}: {fmt_dur(t)}"
+                         + (f" · {link}" if link else ""))
+        if len(flags) > 5:
+            lines.append(f"  … yana {len(flags) - 5} ta")
+    lines += ["", "<i>Batafsil (soatma-soat, har qo'ng'iroq): 👤 Sotuvchi tugmasi</i>"]
     return "\n".join(lines)
 
 
