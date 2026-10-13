@@ -389,24 +389,31 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
     rows.sort(key=lambda x: (RANK.get(x[0], 9), -x[2].talk_sec))
 
     lines.append("")
+    legend = ["<b>Jadvalni o'qish:</b>",
+              "• <b>Vaqt</b> — telefonda gaplashgan vaqti (soat:daqiqa)",
+              "• <b>Qo'ng</b> — jami qilgan qo'ng'iroqlari soni"]
     if show_hour:
-        lines.append(f"<i>Har xodim: bugun jami gaplashgan vaqti · qo'ng'iroqlar soni · "
-                     f"oxirgi soat ({hl}) natijasi</i>")
+        legend.append(f"• <b>Oxirgi soat</b> — {hl} oralig'idagi natija")
     else:
-        lines.append("<i>Har xodim: bugun jami gaplashgan vaqti · qo'ng'iroqlar soni · ulangan (dozvon)</i>")
-    lines.append("")
+        legend.append("• <b>Ulandi</b> — mijoz javob bergan qo'ng'iroqlar (dozvon)")
+    lines += legend
+
+    if show_hour:
+        tbl = ["    " + "Bugun".center(11) + " │ " + "Oxirgi soat",
+               "  " + " №" + " " + "Vaqt" + " " + "Qo'ng" + " │ " + "Vaqt" + " " + "Qo'ng" + "  Xodim"]
+    else:
+        tbl = ["  " + " №" + " " + "Vaqt" + " " + "Qo'ng" + " " + "Ulandi" + "  Xodim"]
     cnt = Counter()
     for n, (g, s, tot) in enumerate(rows, 1):
         cnt[g] += 1
-        lines.append(f"{g} {n}. <b>{escape(s.name)}</b>")
-        info = f"🗣 <b>{fmt_dur(tot.talk_sec)}</b> · 📞 {tot.attempts} ta"
+        nm = escape(s.name)
         if show_hour:
             hb = total(s.buckets[i] for i in hidx)
-            info += f" · ⏱ oxirgi soat: {fmt_dur(hb.talk_sec)}, {hb.attempts} ta"
+            tbl.append(f"{g}{n:>2} {hm(tot.talk_sec):>4} {tot.attempts:>5} │ "
+                       f"{hm(hb.talk_sec):>4} {hb.attempts:>5}  {nm}")
         else:
-            info += f" · ✅ {tot.dozvon} ulangan"
-        lines.append("      " + info)
-    lines.append("")
+            tbl.append(f"{g}{n:>2} {hm(tot.talk_sec):>4} {tot.attempts:>5} {tot.dozvon:>6}  {nm}")
+    lines.append("<pre>" + "\n".join(tbl) + "</pre>")
 
     order = [C.LEVELS[0][0], C.LEVELS[1][0], C.LOW[0], LIVE]
     label = {C.LEVELS[0][0]: "yaxshi", C.LEVELS[1][0]: "minimal", C.LOW[0]: "normadan past",
