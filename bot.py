@@ -27,6 +27,7 @@ log = logging.getLogger("bot")
 
 bx = Bitrix(C.BITRIX_WEBHOOK)
 store = Store(C.STATE_FILE)
+S.EXCLUDED.update(store.excluded_ids())
 _cache: dict[date, tuple[float, S.DayData]] = {}
 _lock = asyncio.Lock()
 _flag_sent: dict[tuple[int, date], set] = {}
@@ -210,6 +211,59 @@ async def on_calls(update, context, title, deps):
     await send_long(context.bot, q.message.chat.id, S.calls_report(day, s))
 
 
+# ================= sotuvchi bo'lmaganlarni chiqarish (admin) =================
+
+async def _exclude_kb() -> InlineKeyboardMarkup | None:
+    today = datetime.now(C.TZ).date()
+    people: dict[int, str] = {}
+    for d in (today, today - timedelta(days=1)):
+        for s in (await get_day(d)).sellers.values():
+            people.setdefault(s.uid, s.name)
+    for k, name in store.excluded.items():
+        people.setdefault(int(k), name)
+    if not people:
+        return None
+    ex = store.excluded_ids()
+    order = sorted(people.items(), key=lambda x: (x[0] not in ex, x[1]))
+    btns = [InlineKeyboardButton(f"{'🚫' if uid in ex else '✅'} {name}"[:40], callback_data=f"x:{uid}")
+            for uid, name in order]
+    return InlineKeyboardMarkup([btns[i:i + 2] for i in range(0, len(btns), 2)])
+
+
+EXCLUDE_HELP = ("Kimlar hisobotda ko'rinsin?\n"
+                "✅ — sotuvchi, hisobotda bor\n"
+                "🚫 — sotuvchi emas, hisobotdan chiqarilgan\n\n"
+                "Ismni bossangiz holati almashadi.")
+
+
+@admin_only
+async def cmd_exclude(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.effective_message.reply_text("⏳ Bitrix24 dan olinmoqda...")
+    kb = await _exclude_kb()
+    if kb is None:
+        await msg.edit_text("Bugun va kecha qo'ng'iroq qilgan xodim topilmadi.")
+        return
+    await msg.edit_text(EXCLUDE_HELP, reply_markup=kb)
+
+
+@admin_only
+async def on_exclude(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = int(q.data.split(":", 1)[1])
+    name = store.excluded.get(str(uid))
+    if name is None:
+        for d in _cache.values():
+            if uid in d[1].sellers:
+                name = d[1].sellers[uid].name
+                break
+    name = name or f"ID {uid}"
+    removed = store.toggle_excluded(uid, name)
+    S.EXCLUDED.clear()
+    S.EXCLUDED.update(store.excluded_ids())
+    await q.answer(f"{name}: hisobotdan chiqarildi" if removed else f"{name}: hisobotga qaytarildi")
+    await q.edit_message_text(EXCLUDE_HELP, reply_markup=await _exclude_kb())
+
+
 # ================= guruhlarni ulash (admin) =================
 
 @admin_only
@@ -372,6 +426,7 @@ async def post_init(app: Application):
         BotCommand("ulash", "Guruhni jamoaga ulash (admin)"),
         BotCommand("uzish", "Guruhni uzish (admin)"),
         BotCommand("guruhlar", "Ulangan guruhlar (admin)"),
+        BotCommand("chiqarish", "Sotuvchi bo'lmaganlarni hisobotdan chiqarish (admin)"),
         BotCommand("tekshir", "Bitrix24 ulanishini tekshirish (admin)"),
         BotCommand("id", "ID ni ko'rish"),
     ])
@@ -395,12 +450,14 @@ def main():
     add(CommandHandler("uzish", cmd_unbind))
     add(CommandHandler("guruhlar", cmd_groups))
     add(CommandHandler("tekshir", cmd_check))
+    add(CommandHandler("chiqarish", cmd_exclude))
     add(MessageHandler(filters.Regex(r"^📊 Holat$"), cmd_status))
     add(MessageHandler(filters.Regex(r"^👤 Sotuvchi$"), cmd_sellers))
     add(MessageHandler(filters.Regex(r"^📅 Kecha$"), cmd_yesterday))
     add(CallbackQueryHandler(on_seller, pattern=r"^s:"))
     add(CallbackQueryHandler(on_calls, pattern=r"^c:"))
     add(CallbackQueryHandler(on_bind, pattern=r"^g:"))
+    add(CallbackQueryHandler(on_exclude, pattern=r"^x:"))
     app.add_error_handler(on_error)
     schedule(app)
     app.run_polling(allowed_updates=Update.ALL_TYPES)

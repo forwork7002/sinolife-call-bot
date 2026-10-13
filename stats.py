@@ -203,10 +203,15 @@ async def build_day(bx, d: date, member_deps: set[int]) -> DayData:
     return data
 
 
+# Bot ichidan (/chiqarish) hisobotdan olib tashlangan xodimlar — Bitrix ID lar
+EXCLUDED: set[int] = set()
+
+
 def team(day: DayData, deps: set[int] | None) -> list[SellerDay]:
+    people = [s for s in day.sellers.values() if s.uid not in EXCLUDED]
     if deps is None:
-        return list(day.sellers.values())
-    return [s for s in day.sellers.values() if s.deps & deps]
+        return people
+    return [s for s in people if s.deps & deps]
 
 
 # ================= yordamchilar =================

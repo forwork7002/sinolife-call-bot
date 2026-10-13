@@ -10,15 +10,18 @@ class Store:
     def __init__(self, path: Path):
         self.path = path
         self.groups: dict[str, dict] = {}
+        self.excluded: dict[str, str] = {}   # hisobotga kirmaydiganlar: Bitrix ID -> ism
         if path.exists():
             try:
-                self.groups = json.loads(path.read_text("utf-8")).get("groups", {})
+                raw = json.loads(path.read_text("utf-8"))
+                self.groups = raw.get("groups", {})
+                self.excluded = raw.get("excluded", {})
             except Exception:
-                self.groups = {}
+                self.groups, self.excluded = {}, {}
 
     def _save(self):
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"groups": self.groups}, ensure_ascii=False, indent=2), "utf-8")
+        tmp.write_text(json.dumps({"groups": self.groups, "excluded": self.excluded}, ensure_ascii=False, indent=2), "utf-8")
         os.replace(tmp, self.path)
 
     def get(self, chat_id: int) -> dict | None:
@@ -42,4 +45,19 @@ class Store:
         out: set[int] = set()
         for g in self.groups.values():
             out |= set(g.get("deps") or [])
+        return out
+
+    def excluded_ids(self) -> set[int]:
+        return {int(k) for k in self.excluded}
+
+    def toggle_excluded(self, uid: int, name: str) -> bool:
+        """True = endi hisobotdan chiqarildi, False = qaytarildi."""
+        k = str(uid)
+        if k in self.excluded:
+            del self.excluded[k]
+            out = False
+        else:
+            self.excluded[k] = name
+            out = True
+        self._save()
         return out
