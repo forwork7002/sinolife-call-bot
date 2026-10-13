@@ -338,8 +338,8 @@ def reasons(day: DayData, s: SellerDay, done: list[int], fdone: float, upto: dat
     nm, nd = need(C.LEVELS[-1][2], C.LEVELS[-1][3], fdone)
     out = []
     if tot.talk_sec < nm * 60:
-        out.append(f"gaplashgani {hm(tot.talk_sec)}, kerak edi {hm(int(nm * 60))} "
-                   f"(<b>{hm(int(nm * 60) - tot.talk_sec)} kam</b>)")
+        out.append(f"gaplashgani {fmt_dur(tot.talk_sec)}, kerak edi {fmt_dur(int(nm * 60))} "
+                   f"(<b>{fmt_dur(int(nm * 60) - tot.talk_sec)} kam</b>)")
     if tot.dozvon < nd:
         out.append(f"dozvon {tot.dozvon} ta, kerak edi {nd} ta")
     g0, g1, gs = longest_gap(day, s, upto)
@@ -390,25 +390,28 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
 
     lines.append("")
     if show_hour:
-        lines.append(f"<i>Jami — bugun · Soat — {hl} · Q — qo'ng'iroq soni</i>")
-        tbl = ["   № " + "Ism".ljust(11) + " " + "Jami".rjust(5) + "  Q │ Soat  Q"]
+        lines.append(f"<i>Har xodim: bugun jami gaplashgan vaqti · qo'ng'iroqlar soni · "
+                     f"oxirgi soat ({hl}) natijasi</i>")
     else:
-        lines.append("<i>Gap — gaplashgan vaqti · Q — qo'ng'iroq · Dz — dozvon</i>")
-        tbl = ["   № " + "Ism".ljust(11) + "  " + "Gap".rjust(5) + "   Q  Dz"]
+        lines.append("<i>Har xodim: bugun jami gaplashgan vaqti · qo'ng'iroqlar soni · ulangan (dozvon)</i>")
+    lines.append("")
     cnt = Counter()
     for n, (g, s, tot) in enumerate(rows, 1):
         cnt[g] += 1
-        nm = escape(short_name(s.name)).ljust(11)
+        lines.append(f"{g} {n}. <b>{escape(s.name)}</b>")
+        info = f"🗣 <b>{fmt_dur(tot.talk_sec)}</b> · 📞 {tot.attempts} ta"
         if show_hour:
             hb = total(s.buckets[i] for i in hidx)
-            tbl.append(f"{g}{n:>2} {nm} {hm(tot.talk_sec):>5} {tot.attempts:>2} │ "
-                       f"{hm(hb.talk_sec):>4} {hb.attempts:>2}")
+            info += f" · ⏱ oxirgi soat: {fmt_dur(hb.talk_sec)}, {hb.attempts} ta"
         else:
-            tbl.append(f"{g}{n:>2} {nm}  {hm(tot.talk_sec):>5} {tot.attempts:>3} {tot.dozvon:>3}")
-    lines.append("<pre>" + "\n".join(tbl) + "</pre>")
+            info += f" · ✅ {tot.dozvon} ulangan"
+        lines.append("      " + info)
+    lines.append("")
 
     order = [C.LEVELS[0][0], C.LEVELS[1][0], C.LOW[0], LIVE]
-    lines.append("  ".join(f"{e} {cnt[e]}" for e in order if cnt[e]))
+    label = {C.LEVELS[0][0]: "yaxshi", C.LEVELS[1][0]: "minimal", C.LOW[0]: "normadan past",
+             LIVE: "baholanmoqda"}
+    lines.append("Natija: " + " · ".join(f"{e} {cnt[e]} {label[e]}" for e in order if cnt[e]))
 
     # Eng yomonlar — aniq sabab bilan
     bad = [(g, s, tot) for g, s, tot in rows if g == C.LOW[0]]
@@ -430,7 +433,7 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
         lines += ["", f"⚠️ <b>1 mijoz bilan {C.LONG_CLIENT_MIN}+ daq</b> (sababini so'rang):"]
         for s, ph, cs, t in sorted(flags, key=lambda x: -x[3])[:5]:
             link = next((_links(c) for c in cs if _links(c)), "")
-            lines.append(f"• {escape(short_name(s.name, 16))} → {fmt_phone(ph)}: {fmt_dur(t)}"
+            lines.append(f"• {escape(s.name)} → {fmt_phone(ph)}: {fmt_dur(t)}"
                          + (f" · {link}" if link else ""))
         if len(flags) > 5:
             lines.append(f"  … yana {len(flags) - 5} ta")
