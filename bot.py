@@ -456,7 +456,9 @@ async def cmd_send_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for cid, g in list(store.groups.items()):
         sel = S.team(day, set(g["deps"]) if g.get("deps") else None)
         try:
-            await send_long(context.bot, int(cid), S.status_report(day, sel, now, g["title"], recent_live=True))
+            # ReplyKeyboardRemove — eski versiyadan qolgan, hammaga ko'rinadigan tugmalarni tozalaydi
+            await send_long(context.bot, int(cid), S.status_report(day, sel, now, g["title"], recent_live=True),
+                            ReplyKeyboardRemove())
             if (hr := S.hour_report(day, sel, now, g["title"])):
                 await send_long(context.bot, int(cid), hr)
             ok += 1
