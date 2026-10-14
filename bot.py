@@ -80,12 +80,51 @@ async def send_long(bot, chat_id: int, text: str, reply_markup=None, reply_to: i
             in_pre = False
     if cur.strip():
         chunks.append(cur)
+    ids = []
     for k, ch in enumerate(chunks):
         last = k == len(chunks) - 1
         rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if (last and reply_to) else None
-        await bot.send_message(chat_id, ch, parse_mode=ParseMode.HTML,
-                               link_preview_options=LinkPreviewOptions(is_disabled=True),
-                               reply_markup=reply_markup if last else None, reply_parameters=rp)
+        m = await bot.send_message(chat_id, ch, parse_mode=ParseMode.HTML,
+                                   link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                   reply_markup=reply_markup if last else None, reply_parameters=rp)
+        ids.append(m.message_id)
+    return ids
+
+
+# ---- Guruhda "izsiz" ishlash: admin bosgan tugma/buyruq xabari va oldingi so'rov natijalari o'chiriladi,
+#      faqat oxirgi natija qoladi. Soatlik avto-hisobotlarga tegilmaydi. (Botga "Delete messages" huquqi kerak.)
+_manual: dict[int, list[int]] = {}
+
+
+def _group(chat) -> bool:
+    return chat.type != ChatType.PRIVATE
+
+
+async def _safe_delete(bot, chat_id: int, mid: int):
+    try:
+        await bot.delete_message(chat_id, mid)
+    except Exception:
+        pass
+
+
+async def clean_traces(update: Update, context: ContextTypes.DEFAULT_TYPE, keep_trigger: bool = False):
+    """Guruhda: buyruq/tugma xabarini va oldingi qo'lda so'ralgan natijalarni o'chiradi."""
+    chat = update.effective_chat
+    if not _group(chat):
+        return
+    if not keep_trigger and update.effective_message and not update.callback_query:
+        await _safe_delete(context.bot, chat.id, update.effective_message.message_id)
+    for mid in _manual.pop(chat.id, []):
+        await _safe_delete(context.bot, chat.id, mid)
+
+
+def remember(chat, ids):
+    if _group(chat):
+        _manual.setdefault(chat.id, []).extend(ids)
+
+
+async def wait_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await context.bot.send_message(update.effective_chat.id, "⏳ Bitrix24 dan olinmoqda...")
 
 
 def is_admin(update: Update) -> bool:
@@ -201,43 +240,52 @@ async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @scoped
 async def cmd_status(update, context, title, deps):
-    msg = await update.effective_message.reply_text("⏳ Bitrix24 dan olinmoqda...")
+    chat = update.effective_chat
+    await clean_traces(update, context)
+    msg = await wait_msg(update, context)
     now = datetime.now(C.TZ)
     day = await get_day(now.date())
     await msg.delete()
     sel = S.team(day, deps)
-    await send_long(context.bot, update.effective_chat.id,
-                    S.status_report(day, sel, now, title, recent_live=True),
-                    kb_for(update.effective_chat), reply_to(update))
+    ids = await send_long(context.bot, chat.id, S.status_report(day, sel, now, title, recent_live=True),
+                          None if _group(chat) else KB)
     if (hr := S.hour_report(day, sel, now, title)):
-        await send_long(context.bot, update.effective_chat.id, hr)
+        ids += await send_long(context.bot, chat.id, hr)
+    remember(chat, ids)
 
 
 @scoped
 async def cmd_yesterday(update, context, title, deps):
-    msg = await update.effective_message.reply_text("⏳ Bitrix24 dan olinmoqda...")
+    chat = update.effective_chat
+    await clean_traces(update, context)
+    msg = await wait_msg(update, context)
     d = datetime.now(C.TZ).date() - timedelta(days=1)
     day = await get_day(d)
     end = datetime.combine(d, C.WORK_END, tzinfo=C.TZ)
     await msg.delete()
-    await send_long(context.bot, update.effective_chat.id,
-                    S.status_report(day, S.team(day, deps), end, title, final=True),
-                    kb_for(update.effective_chat), reply_to(update))
+    ids = await send_long(context.bot, chat.id, S.status_report(day, S.team(day, deps), end, title, final=True),
+                          None if _group(chat) else KB)
+    remember(chat, ids)
 
 
 @scoped
 async def cmd_sellers(update, context, title, deps):
-    msg = await update.effective_message.reply_text("⏳ Bitrix24 dan olinmoqda...")
+    chat = update.effective_chat
+    await clean_traces(update, context)
+    msg = await wait_msg(update, context)
     day = await get_day(datetime.now(C.TZ).date())
     await msg.delete()
     people = sorted(S.team(day, deps), key=lambda s: s.name)
     if not people:
-        await update.effective_message.reply_text("Bugun bu jamoada sotuvchi topilmadi.")
+        m = await context.bot.send_message(chat.id, "Bugun bu jamoada sotuvchi topilmadi.")
+        remember(chat, [m.message_id])
         return
     ds = day.day.strftime("%Y%m%d")
     btns = [InlineKeyboardButton(s.name[:30], callback_data=f"s:{s.uid}:{ds}") for s in people]
-    await update.effective_message.reply_text(
-        "Sotuvchini tanlang:", reply_markup=InlineKeyboardMarkup([btns[i:i + 2] for i in range(0, len(btns), 2)]))
+    m = await context.bot.send_message(
+        chat.id, "👤 Sotuvchini tanlang:",
+        reply_markup=InlineKeyboardMarkup([btns[i:i + 2] for i in range(0, len(btns), 2)]))
+    remember(chat, [m.message_id])
 
 
 async def _seller_from_cb(q, deps):
@@ -259,7 +307,9 @@ async def on_seller(update, context, title, deps):
         return
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("📞 Qo'ng'iroqlar ro'yxati (isbot)",
                                                      callback_data=f"c:{s.uid}:{ds}")]])
-    await send_long(context.bot, q.message.chat.id, S.seller_report(day, s, datetime.now(C.TZ)), kb)
+    await clean_traces(update, context)          # tanlash ro'yxati va eski natijalar o'chadi
+    ids = await send_long(context.bot, q.message.chat.id, S.seller_report(day, s, datetime.now(C.TZ)), kb)
+    remember(q.message.chat, ids)
 
 
 @scoped
@@ -270,7 +320,8 @@ async def on_calls(update, context, title, deps):
     if not s:
         await q.message.reply_text("Ma'lumot topilmadi.")
         return
-    await send_long(context.bot, q.message.chat.id, S.calls_report(day, s))
+    ids = await send_long(context.bot, q.message.chat.id, S.calls_report(day, s))
+    remember(q.message.chat, ids)
 
 
 # ================= sotuvchi bo'lmaganlarni chiqarish (admin) =================
