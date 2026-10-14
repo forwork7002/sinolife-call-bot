@@ -80,6 +80,7 @@ class SellerDay:
     deps: frozenset
     buckets: list
     calls: list = field(default_factory=list)
+    team: str = ""          # ROP jamoasi nomi (masalan "Sevinch (ROP)")
 
 
 @dataclass
@@ -165,6 +166,15 @@ def dept_heads(deps: dict[int, dict]) -> set[int]:
     return out
 
 
+def team_name(udeps, sales: set[int], deps: dict[int, dict]) -> str:
+    """Sotuvchining ROP jamoasi nomi: "Sevinch(ROP)" -> "Sevinch (ROP)"."""
+    ids = sorted(set(udeps) & sales) if sales else sorted(udeps)
+    if not ids:
+        return "Boshqa"
+    n = str(deps.get(ids[0], {}).get("NAME") or f"Bo'lim {ids[0]}").strip()
+    return re.sub(r"\s*\(", " (", n)
+
+
 def sales_deps(deps: dict[int, dict]) -> set[int]:
     """Sotuv bo'limlari: nomida SALES_DEPT_KEYWORD (ROP) bor bo'limlar."""
     kw = C.SALES_DEPT_KEYWORD.upper()
@@ -196,7 +206,8 @@ async def build_day(bx, d: date, member_deps: set[int]) -> DayData:
     def get(uid):
         if uid not in data.sellers:
             u = users.get(uid)
-            data.sellers[uid] = SellerDay(uid, _name(u, uid), _udeps(u), [Bucket() for _ in slots])
+            data.sellers[uid] = SellerDay(uid, _name(u, uid), _udeps(u), [Bucket() for _ in slots],
+                                          team=team_name(_udeps(u), sales, deps_all))
         return data.sellers[uid]
 
     # Ulangan jamoalarning a'zolari — bugun qo'ng'iroq qilmagan bo'lsa ham chiqadi
@@ -388,6 +399,16 @@ def reasons(day: DayData, s: SellerDay, done: list[int], fdone: float, upto: dat
 LINE = "━━━━━━━━━━━━━━━━━━━━"
 
 
+def norm_pct(talk_sec: int, fdone: float) -> int | None:
+    """Minimal normaning necha foizi bajarilgan (gaplashuv vaqti bo'yicha)."""
+    need_sec = C.LEVELS[-1][2] * 60 * fdone
+    return None if need_sec <= 0 else round(100 * talk_sec / need_sec)
+
+
+def _pct(p: int | None) -> str:
+    return "—" if p is None else f"{min(p, 999)}%"
+
+
 def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: str,
                   final: bool = False, recent_live: bool = False,
                   flags: list | None = None) -> str:
@@ -412,45 +433,65 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
     upto = day.slots[done[-1]].end if done else now
     pool = done + ([live] if (recent_live and live is not None) else [])
 
-    # "Oxirgi soat" ustuni: oxirgi 60 daqiqa (2 ta 30 daqiqalik bo'lak)
+    # "Soat" ustuni: oxirgi 60 daqiqa (2 ta 30 daqiqalik bo'lak)
     hidx = pool[-2:] if pool else None
     show_hour = bool(hidx) and not final
+    hl = ""
     if show_hour:
         h_end = now if (recent_live and live in hidx) else day.slots[hidx[-1]].end
         hl = f"{day.slots[hidx[0]].start:%H:%M}–{h_end:%H:%M}"
 
+    # har bir sotuvchi: (baho, sotuvchi, hozirgacha jami, normaning foizi)
     rows = []
     for s in sellers:
-        g = grade(total(s.buckets[i] for i in done), fdone) if fdone > 0 else LIVE
-        rows.append((g or LIVE, s, total(s.buckets[i] for i in pool)))
+        dtot = total(s.buckets[i] for i in done)
+        g = grade(dtot, fdone) if fdone > 0 else LIVE
+        rows.append((g or LIVE, s, total(s.buckets[i] for i in pool), norm_pct(dtot.talk_sec, fdone)))
     rows.sort(key=lambda x: (RANK.get(x[0], 9), -x[2].talk_sec))
 
-    # ---------- 1. Jadval ----------
-    if show_hour:
-        tbl = ["    " + "Bugun".center(11) + " │ " + "Oxirgi soat",
-               "   № Vaqt Qo'ng │ Vaqt Qo'ng  Xodim"]
-    else:
-        tbl = ["   № Vaqt Qo'ng Ulandi  Xodim"]
-    cnt = Counter()
-    for n, (g, s, tot) in enumerate(rows, 1):
-        cnt[g] += 1
-        nm = escape(s.name)
-        if show_hour:
-            hb = total(s.buckets[i] for i in hidx)
-            tbl.append(f"{g}{n:>2} {hm(tot.talk_sec):>4} {tot.attempts:>5} │ "
-                       f"{hm(hb.talk_sec):>4} {hb.attempts:>5}  {nm}")
-        else:
-            tbl.append(f"{g}{n:>2} {hm(tot.talk_sec):>4} {tot.attempts:>5} {tot.dozvon:>6}  {nm}")
-    lines += ["", "<pre>" + "\n".join(tbl) + "</pre>"]
+    # ROP jamoalariga ajratish
+    teams: dict[str, list] = {}
+    for r in rows:
+        teams.setdefault(r[1].team or "Boshqa", []).append(r)
 
-    # ---------- 2. Umumiy natija ----------
-    label = {C.LEVELS[0][0]: "yaxshi", C.LEVELS[1][0]: "minimal", C.LOW[0]: "normadan past",
-             LIVE: "hali baholanmagan"}
-    order = [C.LEVELS[0][0], C.LEVELS[1][0], C.LOW[0], LIVE]
-    team_tot = total(t for _, _, t in rows)
-    lines += [f"👥 {len(rows)} xodim: " + " · ".join(f"{e} {cnt[e]} {label[e]}" for e in order if cnt[e]),
-              f"📞 Jamoa bo'yicha: {fmt_dur(team_tot.talk_sec)} gaplashildi, "
-              f"{team_tot.attempts} qo'ng'iroq, {team_tot.dozvon} ulandi"]
+    def avg_talk(rs):
+        return sum(r[2].talk_sec for r in rs) / max(1, len(rs))
+
+    order_teams = sorted(teams.items(), key=lambda kv: -avg_talk(kv[1]))
+    G, Y, R = C.LEVELS[0][0], C.LEVELS[1][0], C.LOW[0]
+
+    # ---------- 1. Har bir ROP jamoasi alohida ----------
+    if show_hour:
+        head = "   № Vaqt Qo'ng  Soat Norma  Sotuvchi"
+    else:
+        head = "   № Vaqt Qo'ng Ulandi Norma  Sotuvchi"
+    for tname, trs in order_teams:
+        c = Counter(r[0] for r in trs)
+        marks = " ".join(f"{e}{c[e]}" for e in (G, Y, R, LIVE) if c[e])
+        lines += ["", LINE, f"👥 <b>{escape(tname.upper())}</b> · {len(trs)} sotuvchi · {marks}"]
+        tbl = [head]
+        for n, (g, s, tot, pct) in enumerate(trs, 1):
+            if show_hour:
+                hb = total(s.buckets[i] for i in hidx)
+                tbl.append(f"{g}{n:>2} {hm(tot.talk_sec):>4} {tot.attempts:>5}  {hm(hb.talk_sec):>4} "
+                           f"{_pct(pct):>5}  {escape(s.name, quote=False)}")
+            else:
+                tbl.append(f"{g}{n:>2} {hm(tot.talk_sec):>4} {tot.attempts:>5} {tot.dozvon:>6} "
+                           f"{_pct(pct):>5}  {escape(s.name, quote=False)}")
+        lines.append("<pre>" + "\n".join(tbl) + "</pre>")
+        tt = total(r[2] for r in trs)
+        lines.append(f"Jamoa: {fmt_dur(tt.talk_sec)} gaplashdi · {tt.attempts} qo'ng'iroq · "
+                     f"o'rtacha <b>{fmt_dur(int(avg_talk(trs)))}</b> / sotuvchi")
+
+    # ---------- 2. Jamoalar reytingi ----------
+    if len(order_teams) > 1:
+        lines += ["", LINE, "🏆 <b>JAMOALAR REYTINGI</b> (1 sotuvchiga o'rtacha gaplashuv):"]
+        medals = ["🥇", "🥈", "🥉"]
+        for k, (tname, trs) in enumerate(order_teams):
+            ok = sum(1 for r in trs if r[0] in (G, Y))
+            m = medals[k] if k < 3 else f"{k + 1}."
+            lines.append(f"{m} <b>{escape(tname)}</b> — {fmt_dur(int(avg_talk(trs)))} · "
+                         f"normada {ok}/{len(trs)} kishi")
 
     # ---------- 3. 1 mijoz bilan uzoq suhbat ----------
     if flags is None:   # yakuniy hisobotda — hammasi
@@ -466,31 +507,33 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
             lines.append(f"  … yana {len(flags) - 5} ta")
 
     # ---------- 4. Eng past natija (e'lon) ----------
-    bad = sorted([(s, t) for g, s, t in rows if g == C.LOW[0]], key=lambda x: x[1].talk_sec)
+    bad = sorted([(s, t) for g, s, t, _ in rows if g == R], key=lambda x: x[1].talk_sec)
     limit = 5 if final else 3
     lines += ["", LINE]
     if bad and fdone > 0:
         lines.append(f"🔻 <b>ENG PAST NATIJA</b> — {len(bad)} kishidan {min(limit, len(bad))} tasi:")
         for k, (s, t) in enumerate(bad[:limit], 1):
-            lines += ["", f"{k}. 🔴 <b>{escape(s.name)}</b> — {fmt_dur(t.talk_sec)}, {t.attempts} qo'ng'iroq"]
+            team = f" · <i>{escape(s.team)}</i>" if s.team and len(order_teams) > 1 else ""
+            lines += ["", f"{k}. 🔴 <b>{escape(s.name)}</b>{team} — {fmt_dur(t.talk_sec)}, {t.attempts} qo'ng'iroq"]
             lines += [f"    • {r}" for r in reasons(day, s, done, fdone, upto)]
     elif fdone > 0:
-        lines.append("✅ <b>Normadan past xodim yo'q.</b> Barakalla!")
+        lines.append("✅ <b>Normadan past sotuvchi yo'q.</b> Barakalla!")
     else:
         lines.append("⏳ Birinchi 30 daqiqa tugagach baholanadi.")
 
     # ---------- 5. Izoh (eng pastda) ----------
     g_, y_ = C.LEVELS[0], C.LEVELS[1]
-    lines += ["", LINE, "<b>ℹ️ Belgilar ma'nosi</b> (1 soat uchun norma):",
+    lines += ["", LINE, "<b>ℹ️ BELGILAR MA'NOSI</b> (1 soat uchun norma):",
               f"{g_[0]} <b>Yaxshi</b> — {g_[2]}+ daqiqa gaplashgan va {g_[3]}+ ta ulangan qo'ng'iroq",
               f"{y_[0]} <b>Minimal</b> — {y_[2]}+ daqiqa gaplashgan va {y_[3]}+ ta ulangan qo'ng'iroq",
               f"{C.LOW[0]} <b>Normadan past</b> — {y_[2]} daqiqadan kam yoki {y_[3]} tadan kam ulangan",
               f"{LIVE} hali baholanmagan (vaqt tugamagan)",
               "",
-              "<b>Vaqt</b> — telefonda gaplashgan vaqti (soat:daqiqa) · "
-              "<b>Qo'ng</b> — qilgan qo'ng'iroqlari soni · "
-              + (f"<b>Oxirgi soat</b> — {hl} oralig'i" if show_hour
-                 else f"<b>Ulandi</b> — mijoz javob bergan ({C.DOZVON_MIN_SEC}+ soniya) qo'ng'iroqlar"),
+              "<b>Vaqt</b> — telefonda gaplashgan vaqti (soat:daqiqa)",
+              "<b>Qo'ng</b> — qilgan qo'ng'iroqlari soni",
+              (f"<b>Soat</b> — oxirgi 1 soatda ({hl}) gaplashgan vaqti" if show_hour
+               else f"<b>Ulandi</b> — mijoz javob bergan ({C.DOZVON_MIN_SEC}+ soniya) qo'ng'iroqlar"),
+              f"<b>Norma</b> — minimal normaning necha foizi bajarildi (100% = {y_[2]} daq/soat)",
               "<i>Batafsil (soatma-soat, har bir qo'ng'iroq): 👤 Sotuvchi tugmasi</i>"]
     return "\n".join(lines)
 
