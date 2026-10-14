@@ -534,7 +534,7 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
               (f"<b>Soat</b> — oxirgi 1 soatda ({hl}) gaplashgan vaqti" if show_hour
                else f"<b>Ulandi</b> — mijoz javob bergan ({C.DOZVON_MIN_SEC}+ soniya) qo'ng'iroqlar"),
               f"<b>Norma</b> — minimal normaning necha foizi bajarildi (100% = {y_[2]} daq/soat)",
-              "<i>Batafsil (soatma-soat, har bir qo'ng'iroq): 👤 Sotuvchi tugmasi</i>"]
+              "<i>Hisobot har 30 daqiqada o'zi keladi. Batafsil (soatma-soat): /sotuvchi</i>"]
     return "\n".join(lines)
 
 

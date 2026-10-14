@@ -9,7 +9,7 @@ import time as _time
 from datetime import date, datetime, timedelta
 
 from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup,
-                      LinkPreviewOptions, ReplyKeyboardMarkup, Update)
+                      LinkPreviewOptions, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update)
 from telegram.constants import ChatType, ParseMode
 from telegram.error import ChatMigrated, Forbidden
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
@@ -33,6 +33,11 @@ _lock = asyncio.Lock()
 _flag_sent: dict[tuple[int, date], set] = {}
 
 KB = ReplyKeyboardMarkup([["📊 Holat", "👤 Sotuvchi"], ["📅 Kecha"]], resize_keyboard=True)
+
+
+def kb_for(chat) -> ReplyKeyboardMarkup | ReplyKeyboardRemove:
+    """Tugmalar faqat shaxsiy chatda (rahbar uchun). Guruhlarda tugma yo'q — hisobot o'zi keladi."""
+    return KB if chat.type == ChatType.PRIVATE else ReplyKeyboardRemove()
 
 
 # ================= umumiy =================
@@ -138,7 +143,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 Holat — hozirgi holat (har 30 daqiqada o'zi ham yuboriladi)\n"
         "👤 Sotuvchi — bitta sotuvchi: soatma-soat va qo'ng'iroqlar ro'yxati\n"
         "📅 Kecha — kechagi yakuniy hisobot",
-        reply_markup=KB)
+        reply_markup=kb_for(update.effective_chat))
 
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -155,7 +160,8 @@ async def cmd_status(update, context, title, deps):
     day = await get_day(now.date())
     await msg.delete()
     await send_long(context.bot, update.effective_chat.id,
-                    S.status_report(day, S.team(day, deps), now, title, recent_live=True), KB)
+                    S.status_report(day, S.team(day, deps), now, title, recent_live=True),
+                    kb_for(update.effective_chat))
 
 
 @scoped
@@ -166,7 +172,8 @@ async def cmd_yesterday(update, context, title, deps):
     end = datetime.combine(d, C.WORK_END, tzinfo=C.TZ)
     await msg.delete()
     await send_long(context.bot, update.effective_chat.id,
-                    S.status_report(day, S.team(day, deps), end, title, final=True), KB)
+                    S.status_report(day, S.team(day, deps), end, title, final=True),
+                    kb_for(update.effective_chat))
 
 
 @scoped
@@ -317,7 +324,8 @@ async def on_bind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(C.TZ)
     day = await get_day(now.date(), force=True)
     sel = S.team(day, set(dep_list) if dep_list else None)
-    await send_long(context.bot, chat_id, S.status_report(day, sel, now, title, recent_live=True), KB)
+    await send_long(context.bot, chat_id, S.status_report(day, sel, now, title, recent_live=True),
+                    kb_for(q.message.chat))
 
 
 @admin_only
