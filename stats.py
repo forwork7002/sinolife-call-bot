@@ -582,7 +582,8 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
 
     # ---------- 5. Izoh (eng pastda) ----------
     lines += ["", LINE] + norm_legend() + ["", LINE] + columns_legend(with_norm=True)
-    lines += ["", "<i>🔄 Hisobot har 30 daqiqada o'zi keladi: 📊 bugungi holat + ⏱ oxirgi 1 soat.</i>"]
+    every = "1 soatda" if C.REPORT_EVERY_MIN == 60 else f"{C.REPORT_EVERY_MIN} daqiqada"
+    lines += ["", f"<i>🔄 Hisobot har {every} o'zi keladi: 📊 bugungi holat + ⏱ oxirgi 1 soat.</i>"]
     return "\n".join(lines)
 
 

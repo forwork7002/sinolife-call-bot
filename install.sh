@@ -30,8 +30,10 @@ if [ ! -f .env ]; then
 BOT_TOKEN=$TOKEN
 BITRIX_WEBHOOK=$HOOK
 ADMIN_IDS=$ADMINS
-WORK_START=08:30
-WORK_END=18:00
+WORK_START=09:00
+WORK_END=22:00
+# Guruhga hisobot har necha daqiqada (60 = har 1 soatda)
+REPORT_EVERY_MIN=60
 # Tushlik bo'lsa yozing, masalan 13:00 va 14:00
 LUNCH_START=
 LUNCH_END=

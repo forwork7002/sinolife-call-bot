@@ -2,7 +2,8 @@
 
 ## Bot nima qiladi
 - Bitrix24 dan har bir sotuvchining telefonda gaplashgan vaqtini va dozvonlarini oladi.
-- **Har 30 daqiqada** (08:30–18:00) har bir guruhga o'z jamoasining hisobotini yuboradi, 18:00 da kun yakunini yuboradi.
+- **Har 1 soatda** (09:00–22:00) har bir guruhga o'z jamoasining hisobotini yuboradi (bugungi holat + oxirgi 1 soat), 22:00 da kun yakunini yuboradi.
+- Ish vaqti va oraliq `.env` da: `WORK_START`, `WORK_END`, `REPORT_EVERY_MIN`.
 - Baholash (1 soat uchun): 🟢 30 daq + 5 dozvon · 🟡 20 daq + 3 dozvon · 🔴 bundan kam.
 - Bitta mijoz bilan jami 15 daqiqadan ko'p gaplashilgan bo'lsa ⚠️ bilan ko'rsatadi: raqam, vaqtlar, CRM havolasi.
 - Isbot: 👤 Sotuvchi → 📞 qo'ng'iroqlar ro'yxati (har qo'ng'iroq vaqti, raqami, davomiyligi, CRM havolasi).

@@ -186,7 +186,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         do_quote=update.effective_chat.type != ChatType.PRIVATE,
         text=
         f"Salom! Jamoa: {sc[0]}\n\n"
-        "📊 Holat — hozirgi holat (har 30 daqiqada o'zi ham yuboriladi)\n"
+        f"📊 Holat — hozirgi holat (har {C.REPORT_EVERY_MIN} daqiqada o'zi ham yuboriladi)\n"
         "👤 Sotuvchi — bitta sotuvchi: soatma-soat va qo'ng'iroqlar ro'yxati\n"
         "📅 Kecha — kechagi yakuniy hisobot",
         reply_markup=kb_for(update.effective_chat))
@@ -369,7 +369,7 @@ async def on_bind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _cache.clear()
     await q.edit_message_text(
         f"✅ Ulandi. Bu guruh endi «{title}» hisobotini oladi.\n"
-        f"Har {C.SLOT_MIN} daqiqada, {C.WORK_START:%H:%M}–{C.WORK_END:%H:%M} oralig'ida.")
+        f"Har {C.REPORT_EVERY_MIN} daqiqada, {C.WORK_START:%H:%M}–{C.WORK_END:%H:%M} oralig'ida.")
     now = datetime.now(C.TZ)
     day = await get_day(now.date(), force=True)
     sel = S.team(day, set(dep_list) if dep_list else None)
@@ -440,7 +440,7 @@ async def check_text() -> str:
     return "\n".join(lines)
 
 
-# ================= har 30 daqiqalik avto-hisobot =================
+# ================= avto-hisobot (har REPORT_EVERY_MIN daqiqada) =================
 
 async def job_report(context: ContextTypes.DEFAULT_TYPE):
     if not store.groups:
@@ -462,7 +462,7 @@ async def job_report(context: ContextTypes.DEFAULT_TYPE):
         deps = set(g["deps"]) if g.get("deps") else None
         sel = S.team(day, deps)
         flags = None
-        if not final:   # 30 daqiqalik hisobotda faqat YANGI ogohlantirishlar
+        if not final:   # oraliq hisobotda faqat YANGI ogohlantirishlar
             sent = _flag_sent.setdefault((cid, day.day), set())
             flags = []
             for s in sel:
@@ -489,10 +489,15 @@ async def job_report(context: ContextTypes.DEFAULT_TYPE):
 
 def schedule(app: Application):
     days = tuple(sorted(d % 7 for d in C.WORK_DAYS))   # PTB: 0=yakshanba
-    for sl in S.day_slots(datetime.now(C.TZ).date()):
+    slots = S.day_slots(datetime.now(C.TZ).date())
+    for k, sl in enumerate(slots):
+        since = int((sl.end - slots[0].start).total_seconds() // 60)
+        # faqat har REPORT_EVERY_MIN daqiqada (masalan 10:00, 11:00, ...) va ish kuni oxirida
+        if since % C.REPORT_EVERY_MIN and k != len(slots) - 1:
+            continue
         t = (sl.end + timedelta(minutes=C.REPORT_DELAY_MIN)).timetz()
         app.job_queue.run_daily(job_report, time=t, days=days)
-    log.info("Avto-hisobot: har %s daqiqada, %s–%s", C.SLOT_MIN, C.WORK_START, C.WORK_END)
+    log.info("Avto-hisobot: har %s daqiqada, %s–%s", C.REPORT_EVERY_MIN, C.WORK_START, C.WORK_END)
 
 
 async def post_init(app: Application):
