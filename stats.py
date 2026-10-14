@@ -380,19 +380,19 @@ def reasons(day: DayData, s: SellerDay, done: list[int], fdone: float, upto: dat
     """Nega past baho — aniq, raqamli sabablar (eng muhimi birinchi)."""
     tot = total(s.buckets[i] for i in done)
     if tot.attempts == 0:
-        return ["bugun birorta ham qo'ng'iroq yo'q"]
+        return ["📵 bugun birorta ham qo'ng'iroq qilmagan"]
     nm, nd = need(C.LEVELS[-1][2], C.LEVELS[-1][3], fdone)
     out = []
     if tot.talk_sec < nm * 60:
-        out.append(f"gaplashgani {fmt_dur(tot.talk_sec)}, kerak edi {fmt_dur(int(nm * 60))} "
-                   f"(<b>{fmt_dur(int(nm * 60) - tot.talk_sec)} kam</b>)")
+        out.append(f"🗣 gaplashgani <b>{tot.talk_sec // 60} daq</b>, kerak edi {int(nm)} daq "
+                   f"→ <b>{int(nm) - tot.talk_sec // 60} daqiqa kam</b>")
     if tot.dozvon < nd:
-        out.append(f"ulangan qo'ng'iroq {tot.dozvon} ta, kerak edi {nd} ta")
+        out.append(f"✅ ulangan qo'ng'iroq <b>{tot.dozvon} ta</b>, kerak edi {nd} ta")
     g0, g1, gs = longest_gap(day, s, upto)
     if gs >= 45 * 60:
-        out.append(f"{g0:%H:%M}–{g1:%H:%M} orasida {fmt_dur(gs)} qo'ng'iroq qilmagan")
+        out.append(f"⏸ <b>{g0:%H:%M}–{g1:%H:%M}</b> orasida {gs // 60} daqiqa umuman qo'ng'iroq qilmagan")
     if tot.attempts >= 10 and tot.dozvon / tot.attempts < 0.25:
-        out.append(f"{tot.attempts} ta qo'ng'iroq qildi, faqat {tot.dozvon} tasiga mijoz javob berdi")
+        out.append(f"📞 {tot.attempts} ta qo'ng'iroq qildi, faqat {tot.dozvon} tasiga mijoz javob berdi")
     return out[:3]
 
 
@@ -417,6 +417,34 @@ def table_row(g: str, n: int, b: Bucket) -> str:
     return f"{g}{n:>2} {b.talk_sec // 60:>6} {b.attempts:>5} {b.dozvon:>6}"
 
 
+def norm_legend() -> list[str]:
+    """Rang belgilari — har biri "1 soatda" bilan boshlanadi."""
+    g_, y_ = C.LEVELS[0], C.LEVELS[1]
+    return [
+        "🎯 <b>NORMA — 1 SOATDA:</b>",
+        f"{g_[0]} <b>Yaxshi</b> — 1 soatda kamida <b>{g_[2]} daqiqa</b> gaplashgan "
+        f"va kamida <b>{g_[3]} ta</b> qo'ng'iroq ulangan",
+        f"{y_[0]} <b>Minimal</b> — 1 soatda kamida <b>{y_[2]} daqiqa</b> gaplashgan "
+        f"va kamida <b>{y_[3]} ta</b> qo'ng'iroq ulangan",
+        f"{C.LOW[0]} <b>Normadan past</b> — 1 soatda {y_[2]} daqiqadan kam gaplashgan "
+        f"yoki {y_[3]} tadan kam qo'ng'iroq ulangan",
+        f"{LIVE} <b>Baholanmagan</b> — 30 daqiqa hali tugamagan",
+        "",
+        f"💡 <i>Masalan: 3 soat ishlagan sotuvchi kamida {3 * y_[2]} daqiqa gaplashishi "
+        f"va kamida {3 * y_[3]} ta ulangan qo'ng'iroq qilishi kerak.</i>",
+    ]
+
+
+def columns_legend(with_norm: bool) -> list[str]:
+    out = ["📋 <b>JADVAL USTUNLARI:</b>",
+           "🗣 <b>Daqiqa</b> — telefonda gaplashgan vaqti (60 daqiqa = 1 soat)",
+           "📞 <b>Qo'ng</b> — jami qilgan qo'ng'iroqlari soni",
+           f"✅ <b>Ulandi</b> — mijoz ko'tarib, {C.DOZVON_MIN_SEC} soniyadan uzun gaplashilgan qo'ng'iroqlar"]
+    if with_norm:
+        out.append("📈 <b>Norma</b> — normaning necha foizi bajarildi (100% va undan ko'p = norma bajarildi)")
+    return out
+
+
 def hour_report(day: DayData, sellers: list[SellerDay], now: datetime, title: str) -> str | None:
     """Oxirgi 1 soat (2 ta tugagan 30 daqiqalik bo'lak) — har bir ROP jamoasi alohida."""
     done = [i for i, sl in enumerate(day.slots) if sl.state(now) == "done" and not sl.lunch]
@@ -429,7 +457,7 @@ def hour_report(day: DayData, sellers: list[SellerDay], now: datetime, title: st
     nm, nd = need(C.LEVELS[-1][2], C.LEVELS[-1][3], f)
     lines = [f"⏱ <b>OXIRGI {'1 SOAT' if mins >= 60 else f'{mins} DAQIQA'} · {escape(title)}</b>",
              f"🕘 Davr: <b>{h0:%H:%M} dan {h1:%H:%M} gacha</b>",
-             f"Norma shu vaqt uchun: <b>{_num(nm)} daqiqa</b> gaplashish va <b>{nd} ta</b> ulangan qo'ng'iroq"]
+             f"🎯 Norma shu vaqtga: kamida <b>{_num(nm)} daqiqa</b> gaplashish va kamida <b>{nd} ta</b> ulangan qo'ng'iroq"]
     rows = []
     for s in sellers:
         b = total(s.buckets[i] for i in hidx)
@@ -447,10 +475,8 @@ def hour_report(day: DayData, sellers: list[SellerDay], now: datetime, title: st
         lines += ["", f"👥 <b>{escape(tname.upper())}</b> · {marks}", "<pre>" + "\n".join(tbl) + "</pre>"]
         zero = [r[1].name for r in trs if r[2].attempts == 0]
         if zero:
-            lines.append(f"❗ Shu vaqtda umuman qo'ng'iroq qilmagan: {escape(', '.join(zero))}")
-    g_, y_ = C.LEVELS[0], C.LEVELS[1]
-    lines += ["", f"<i>{g_[0]} {g_[2]}+ daq va {g_[3]}+ ulangan · {y_[0]} {y_[2]}+ daq va {y_[3]}+ ulangan · "
-                  f"{C.LOW[0]} bundan kam (1 soat uchun)</i>"]
+            lines.append(f"📵 Shu vaqtda umuman qo'ng'iroq qilmagan: <b>{escape(', '.join(zero))}</b>")
+    lines += ["", LINE] + norm_legend()
     return "\n".join(lines)
 
 
@@ -513,8 +539,8 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
             tbl.append(f"{table_row(g, n, tot)} {_pct(pct):>5} {escape(s.name, quote=False)}")
         lines.append("<pre>" + "\n".join(tbl) + "</pre>")
         tt = total(r[2] for r in trs)
-        lines.append(f"Jamoa: {fmt_dur(tt.talk_sec)} gaplashdi · {tt.attempts} qo'ng'iroq · "
-                     f"o'rtacha <b>{fmt_dur(int(avg_talk(trs)))}</b> / sotuvchi")
+        lines.append(f"📌 Jamoa jami: 🗣 {tt.talk_sec // 60} daq · 📞 {tt.attempts} ta · ✅ {tt.dozvon} ulandi")
+        lines.append(f"📌 1 sotuvchiga o'rtacha: <b>{int(avg_talk(trs)) // 60} daqiqa</b> gaplashuv")
 
     # ---------- 2. Jamoalar reytingi ----------
     if len(order_teams) > 1:
@@ -547,7 +573,7 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
         lines.append(f"🔻 <b>ENG PAST NATIJA</b> — {len(bad)} kishidan {min(limit, len(bad))} tasi:")
         for k, (s, t) in enumerate(bad[:limit], 1):
             team = f" · <i>{escape(s.team)}</i>" if s.team and len(order_teams) > 1 else ""
-            lines += ["", f"{k}. 🔴 <b>{escape(s.name)}</b>{team} — {fmt_dur(t.talk_sec)}, {t.attempts} qo'ng'iroq"]
+            lines += ["", f"{k}. 🔴 <b>{escape(s.name)}</b>{team}"]
             lines += [f"    • {r}" for r in reasons(day, s, done, fdone, upto)]
     elif fdone > 0:
         lines.append("✅ <b>Normadan past sotuvchi yo'q.</b> Barakalla!")
@@ -555,18 +581,8 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
         lines.append("⏳ Birinchi 30 daqiqa tugagach baholanadi.")
 
     # ---------- 5. Izoh (eng pastda) ----------
-    g_, y_ = C.LEVELS[0], C.LEVELS[1]
-    lines += ["", LINE, "<b>ℹ️ BELGILAR MA'NOSI</b> (1 soat uchun norma):",
-              f"{g_[0]} <b>Yaxshi</b> — {g_[2]}+ daqiqa gaplashgan va {g_[3]}+ ta ulangan qo'ng'iroq",
-              f"{y_[0]} <b>Minimal</b> — {y_[2]}+ daqiqa gaplashgan va {y_[3]}+ ta ulangan qo'ng'iroq",
-              f"{C.LOW[0]} <b>Normadan past</b> — {y_[2]} daqiqadan kam yoki {y_[3]} tadan kam ulangan",
-              f"{LIVE} hali baholanmagan (vaqt tugamagan)",
-              "",
-              "<b>Daqiqa</b> — telefonda gaplashgan vaqti, daqiqada (60 daq = 1 soat)",
-              "<b>Qo'ng</b> — qilgan qo'ng'iroqlari soni",
-              f"<b>Ulandi</b> — mijoz javob bergan ({C.DOZVON_MIN_SEC}+ soniya) qo'ng'iroqlar",
-              f"<b>Norma</b> — minimal normaning necha foizi bajarildi (100% = {y_[2]} daq/soat)",
-              "<i>Hisobot har 30 daqiqada o'zi keladi: bugungi holat + oxirgi 1 soat.</i>"]
+    lines += ["", LINE] + norm_legend() + ["", LINE] + columns_legend(with_norm=True)
+    lines += ["", "<i>🔄 Hisobot har 30 daqiqada o'zi keladi: 📊 bugungi holat + ⏱ oxirgi 1 soat.</i>"]
     return "\n".join(lines)
 
 
