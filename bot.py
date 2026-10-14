@@ -187,9 +187,12 @@ async def cmd_status(update, context, title, deps):
     now = datetime.now(C.TZ)
     day = await get_day(now.date())
     await msg.delete()
+    sel = S.team(day, deps)
     await send_long(context.bot, update.effective_chat.id,
-                    S.status_report(day, S.team(day, deps), now, title, recent_live=True),
+                    S.status_report(day, sel, now, title, recent_live=True),
                     kb_for(update.effective_chat))
+    if (hr := S.hour_report(day, sel, now, title)):
+        await send_long(context.bot, update.effective_chat.id, hr)
 
 
 @scoped
@@ -448,12 +451,16 @@ async def job_report(context: ContextTypes.DEFAULT_TYPE):
                     if (s.uid, ph) not in sent:
                         sent.add((s.uid, ph))
                         flags.append((s, ph, cs, t))
-        text = S.status_report(day, sel, now, g["title"], final=final, flags=flags)
+        texts = [S.status_report(day, sel, now, g["title"], final=final, flags=flags)]
+        if not final and (hr := S.hour_report(day, sel, now, g["title"])):
+            texts.append(hr)
         try:
-            await send_long(context.bot, cid, text)
+            for text in texts:
+                await send_long(context.bot, cid, text)
         except ChatMigrated as e:
             store.move(cid, e.new_chat_id)
-            await send_long(context.bot, e.new_chat_id, text)
+            for text in texts:
+                await send_long(context.bot, e.new_chat_id, text)
         except Forbidden:
             log.warning("Bot guruhdan chiqarilgan: %s — uzildi", cid)
             store.unbind(cid)
