@@ -89,9 +89,37 @@ def scope_of(update: Update):
     return None
 
 
+_chat_admins: dict[tuple[int, int], tuple[float, bool]] = {}
+
+
+async def can_use(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Guruhda buyruq/tugmalardan faqat adminlar foydalanadi: bot admini (ADMIN_IDS)
+    yoki shu Telegram guruhining administratorlari. Shaxsiy chatda — scope_of tekshiradi."""
+    chat, user = update.effective_chat, update.effective_user
+    if chat.type == ChatType.PRIVATE or is_admin(update):
+        return True
+    if not user:
+        return False
+    key = (chat.id, user.id)
+    hit = _chat_admins.get(key)
+    if hit and _time.time() - hit[0] < 600:
+        return hit[1]
+    try:
+        m = await context.bot.get_chat_member(chat.id, user.id)
+        ok = m.status in ("administrator", "creator")
+    except Exception:
+        ok = False
+    _chat_admins[key] = (_time.time(), ok)
+    return ok
+
+
 def scoped(fn):
     @functools.wraps(fn)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await can_use(update, context):
+            if update.callback_query:
+                await update.callback_query.answer("⛔ Faqat adminlar uchun", show_alert=True)
+            return   # oddiy a'zolar yozsa — jim turadi, guruhni xabar bilan to'ldirmaydi
         sc = scope_of(update)
         if sc is None:
             if update.callback_query:
