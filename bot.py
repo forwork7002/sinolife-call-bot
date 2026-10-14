@@ -9,7 +9,8 @@ import time as _time
 from datetime import date, datetime, timedelta
 
 from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup,
-                      LinkPreviewOptions, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update)
+                      LinkPreviewOptions, ReplyKeyboardMarkup, ReplyKeyboardRemove,
+                      ReplyParameters, Update)
 from telegram.constants import ChatType, ParseMode
 from telegram.error import ChatMigrated, Forbidden
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
@@ -35,9 +36,20 @@ _flag_sent: dict[tuple[int, date], set] = {}
 KB = ReplyKeyboardMarkup([["📊 Holat", "👤 Sotuvchi"], ["📅 Kecha"]], resize_keyboard=True)
 
 
-def kb_for(chat) -> ReplyKeyboardMarkup | ReplyKeyboardRemove:
-    """Tugmalar faqat shaxsiy chatda (rahbar uchun). Guruhlarda tugma yo'q — hisobot o'zi keladi."""
-    return KB if chat.type == ChatType.PRIVATE else ReplyKeyboardRemove()
+# Guruhda tugmalar faqat so'ragan adminga ko'rinadi (selective) — oddiy a'zolarga ochilmaydi.
+KB_ADMIN = ReplyKeyboardMarkup([["📊 Holat", "👤 Sotuvchi"], ["📅 Kecha"]], resize_keyboard=True,
+                               selective=True)
+
+
+def kb_for(chat) -> ReplyKeyboardMarkup:
+    """Shaxsiy chatda — oddiy tugmalar. Guruhda — faqat buyruq bergan admin ko'radigan tugmalar."""
+    return KB if chat.type == ChatType.PRIVATE else KB_ADMIN
+
+
+def reply_to(update: Update) -> int | None:
+    """Guruhda tugmalar faqat shu odamga ko'rinishi uchun javob uning xabariga reply bo'ladi."""
+    m = update.effective_message
+    return m.message_id if (m and update.effective_chat.type != ChatType.PRIVATE) else None
 
 
 # ================= umumiy =================
@@ -53,7 +65,7 @@ async def get_day(d: date, force: bool = False) -> S.DayData:
         return data
 
 
-async def send_long(bot, chat_id: int, text: str, reply_markup=None):
+async def send_long(bot, chat_id: int, text: str, reply_markup=None, reply_to: int | None = None):
     # Telegram 4096 belgidan uzun xabarni qabul qilmaydi — bo'laklarga bo'lamiz.
     # <pre> jadval ikkiga bo'linsa, teglar buzilmasligi uchun yopib/qayta ochamiz.
     chunks, cur, in_pre = [], "", False
@@ -69,9 +81,11 @@ async def send_long(bot, chat_id: int, text: str, reply_markup=None):
     if cur.strip():
         chunks.append(cur)
     for k, ch in enumerate(chunks):
+        last = k == len(chunks) - 1
+        rp = ReplyParameters(reply_to, allow_sending_without_reply=True) if (last and reply_to) else None
         await bot.send_message(chat_id, ch, parse_mode=ParseMode.HTML,
                                link_preview_options=LinkPreviewOptions(is_disabled=True),
-                               reply_markup=reply_markup if k == len(chunks) - 1 else None)
+                               reply_markup=reply_markup if last else None, reply_parameters=rp)
 
 
 def is_admin(update: Update) -> bool:
@@ -157,6 +171,8 @@ def admin_only(fn):
 # ================= buyruqlar =================
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await can_use(update, context):
+        return   # guruhdagi oddiy a'zo — tugmalar ochilmaydi
     sc = scope_of(update)
     if sc is None:
         if update.effective_chat.type == ChatType.PRIVATE:
@@ -167,6 +183,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text("Bu guruhni ulash uchun /ulash bosing.")
         return
     await update.effective_message.reply_text(
+        do_quote=update.effective_chat.type != ChatType.PRIVATE,
+        text=
         f"Salom! Jamoa: {sc[0]}\n\n"
         "📊 Holat — hozirgi holat (har 30 daqiqada o'zi ham yuboriladi)\n"
         "👤 Sotuvchi — bitta sotuvchi: soatma-soat va qo'ng'iroqlar ro'yxati\n"
@@ -190,7 +208,7 @@ async def cmd_status(update, context, title, deps):
     sel = S.team(day, deps)
     await send_long(context.bot, update.effective_chat.id,
                     S.status_report(day, sel, now, title, recent_live=True),
-                    kb_for(update.effective_chat))
+                    kb_for(update.effective_chat), reply_to(update))
     if (hr := S.hour_report(day, sel, now, title)):
         await send_long(context.bot, update.effective_chat.id, hr)
 
@@ -204,7 +222,7 @@ async def cmd_yesterday(update, context, title, deps):
     await msg.delete()
     await send_long(context.bot, update.effective_chat.id,
                     S.status_report(day, S.team(day, deps), end, title, final=True),
-                    kb_for(update.effective_chat))
+                    kb_for(update.effective_chat), reply_to(update))
 
 
 @scoped
@@ -355,8 +373,9 @@ async def on_bind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(C.TZ)
     day = await get_day(now.date(), force=True)
     sel = S.team(day, set(dep_list) if dep_list else None)
+    # Eski versiyadan qolgan, hammaga ko'rinadigan tugmalarni guruhdan tozalaymiz
     await send_long(context.bot, chat_id, S.status_report(day, sel, now, title, recent_live=True),
-                    kb_for(q.message.chat))
+                    ReplyKeyboardRemove())
 
 
 @admin_only
