@@ -440,6 +440,36 @@ async def check_text() -> str:
     return "\n".join(lines)
 
 
+# ================= hozir hamma guruhga yuborish (test) =================
+
+@admin_only
+async def cmd_send_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/yubor — ulangan barcha guruhlarga hozirgi holatni darhol yuboradi (sinov uchun).
+    Soatlik avto-hisobot o'z vaqtida o'zi davom etadi."""
+    if not store.groups:
+        await update.effective_message.reply_text("Hali birorta guruh ulanmagan. Guruhda /ulash qiling.")
+        return
+    msg = await update.effective_message.reply_text(f"⏳ {len(store.groups)} ta guruhga yuborilmoqda...")
+    now = datetime.now(C.TZ)
+    day = await get_day(now.date(), force=True)
+    ok, bad = 0, []
+    for cid, g in list(store.groups.items()):
+        sel = S.team(day, set(g["deps"]) if g.get("deps") else None)
+        try:
+            await send_long(context.bot, int(cid), S.status_report(day, sel, now, g["title"], recent_live=True))
+            if (hr := S.hour_report(day, sel, now, g["title"])):
+                await send_long(context.bot, int(cid), hr)
+            ok += 1
+        except Exception as e:
+            log.exception("Yuborib bo'lmadi: %s", cid)
+            bad.append(f"{g['title']}: {e}")
+    text = f"✅ {ok} ta guruhga yuborildi."
+    if bad:
+        text += "\n❌ Yuborilmadi:\n" + "\n".join(bad)
+    text += f"\n\nKeyingi avto-hisobotlar har {C.REPORT_EVERY_MIN} daqiqada o'zi keladi."
+    await msg.edit_text(text)
+
+
 # ================= avto-hisobot (har REPORT_EVERY_MIN daqiqada) =================
 
 async def job_report(context: ContextTypes.DEFAULT_TYPE):
@@ -508,6 +538,7 @@ async def post_init(app: Application):
         BotCommand("ulash", "Guruhni jamoaga ulash (admin)"),
         BotCommand("uzish", "Guruhni uzish (admin)"),
         BotCommand("guruhlar", "Ulangan guruhlar (admin)"),
+        BotCommand("yubor", "Hozirgi holatni barcha guruhlarga yuborish (admin)"),
         BotCommand("chiqarish", "Sotuvchi bo'lmaganlarni hisobotdan chiqarish (admin)"),
         BotCommand("tekshir", "Bitrix24 ulanishini tekshirish (admin)"),
         BotCommand("id", "ID ni ko'rish"),
@@ -532,6 +563,7 @@ def main():
     add(CommandHandler("uzish", cmd_unbind))
     add(CommandHandler("guruhlar", cmd_groups))
     add(CommandHandler("tekshir", cmd_check))
+    add(CommandHandler("yubor", cmd_send_now))
     add(CommandHandler("chiqarish", cmd_exclude))
     add(MessageHandler(filters.Regex(r"^📊 Holat$"), cmd_status))
     add(MessageHandler(filters.Regex(r"^👤 Sotuvchi$"), cmd_sellers))
