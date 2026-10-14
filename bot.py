@@ -363,7 +363,16 @@ async def check_text() -> str:
     start = datetime.combine(now.date(), C.WORK_START, tzinfo=C.TZ)
     calls = await bx.calls_between(start, start + timedelta(days=1))
     ok = sum(1 for c in calls if str(c.get("CALL_FAILED_CODE")) == "200")
+    heads = S.dept_heads(deps)
+    sd = S.sales_deps(deps)
+    sellers = [u for uid, u in users.items()
+               if S._active(u) and S._udeps(u) & sd and not (C.EXCLUDE_HEADS and uid in heads)]
+    lines.append(f"Sotuv bo'limlari («{C.SALES_DEPT_KEYWORD}»): {len(sd)} ta · sotuvchilar: {len(sellers)} ta"
+                 if sd else "❌ Sotuv bo'limlari topilmadi — hamma xodim olinadi (department huquqini tekshiring)")
+    hn = ", ".join(S._name(users.get(h), h) for h in sorted(heads))
     lines += [f"Xodimlar: {len(users)} · bo'limlar: {len(deps)}",
+              (f"Hisobotga kirmaydigan rahbarlar (ROP): {len(heads)} — {hn}" if C.EXCLUDE_HEADS and heads
+               else "Rahbarlar (ROP) aniqlanmadi — /chiqarish orqali qo'lda olib tashlang"),
               f"Bugungi qo'ng'iroqlar: {len(calls)} (ulangan: {ok})",
               f"Ulangan guruhlar: {len(store.groups)}"]
     if calls:

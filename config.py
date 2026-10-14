@@ -40,6 +40,12 @@ WORK_DAYS = {int(x) for x in os.getenv("WORK_DAYS", "1,2,3,4,5,6").split(",") if
 
 ADMIN_IDS = _ids("ADMIN_IDS")            # rahbar(lar)ning Telegram ID si
 EXCLUDE_USER_IDS = _ids("EXCLUDE_USER_IDS")
+# Bitrix24 dagi bo'lim rahbarlari (ROPlar, direktor) hisobotga kirmaydi — faqat sotuvchilar.
+# O'chirish uchun .env ga EXCLUDE_HEADS=0 yozing.
+EXCLUDE_HEADS = os.getenv("EXCLUDE_HEADS", "1").strip() not in ("0", "no", "false", "")
+# Faqat sotuvchilar: nomida shu so'z bor bo'limlar a'zolari olinadi (masalan "Sevinch(ROP)").
+# Логистика, Операцион, Регистрация va boshqa bo'limlar hisobotga kirmaydi.
+SALES_DEPT_KEYWORD = os.getenv("SALES_DEPT_KEYWORD", "ROP").strip()
 
 SLOT_MIN = 30                            # hisobot oralig'i (daqiqa)
 DOZVON_MIN_SEC = int(os.getenv("DOZVON_MIN_SEC", "10"))

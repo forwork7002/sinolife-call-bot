@@ -155,6 +155,24 @@ def expand_deps(dep_id: int, deps: dict[int, dict]) -> set[int]:
     return out
 
 
+def dept_heads(deps: dict[int, dict]) -> set[int]:
+    """Bo'lim rahbarlari (Bitrix24 «Структура компании» dagi Руководитель) — ROPlar, direktor."""
+    out = set()
+    for d in deps.values():
+        h = str(d.get("UF_HEAD") or "").strip()
+        if h.isdigit() and h != "0":
+            out.add(int(h))
+    return out
+
+
+def sales_deps(deps: dict[int, dict]) -> set[int]:
+    """Sotuv bo'limlari: nomida SALES_DEPT_KEYWORD (ROP) bor bo'limlar."""
+    kw = C.SALES_DEPT_KEYWORD.upper()
+    if not kw:
+        return set()
+    return {i for i, d in deps.items() if kw in str(d.get("NAME") or "").upper()}
+
+
 async def build_day(bx, d: date, member_deps: set[int]) -> DayData:
     slots = day_slots(d)
     data = DayData(d, slots)
@@ -162,6 +180,18 @@ async def build_day(bx, d: date, member_deps: set[int]) -> DayData:
         return data
     calls = await bx.calls_between(slots[0].start, slots[-1].end)
     users = await bx.users()
+    deps_all = await bx.departments()
+    skip = set(C.EXCLUDE_USER_IDS)
+    if C.EXCLUDE_HEADS:
+        skip |= dept_heads(deps_all)
+    sales = sales_deps(deps_all)
+
+    def is_seller(uid: int) -> bool:
+        if uid in skip:
+            return False
+        if not sales:            # bo'limlar o'qilmasa — hammasi (eski xatti-harakat)
+            return True
+        return bool(_udeps(users.get(uid)) & sales)
 
     def get(uid):
         if uid not in data.sellers:
@@ -171,7 +201,7 @@ async def build_day(bx, d: date, member_deps: set[int]) -> DayData:
 
     # Ulangan jamoalarning a'zolari — bugun qo'ng'iroq qilmagan bo'lsa ham chiqadi
     for uid, u in users.items():
-        if uid not in C.EXCLUDE_USER_IDS and _active(u) and _udeps(u) & member_deps:
+        if is_seller(uid) and _active(u) and _udeps(u) & member_deps:
             get(uid)
 
     first = slots[0].start
@@ -181,7 +211,7 @@ async def build_day(bx, d: date, member_deps: set[int]) -> DayData:
             t = datetime.fromisoformat(c["CALL_START_DATE"])
         except (TypeError, ValueError, KeyError):
             continue
-        if not uid or uid in C.EXCLUDE_USER_IDS:
+        if not uid or not is_seller(uid):
             continue
         t = t.replace(tzinfo=C.TZ) if t.tzinfo is None else t.astimezone(C.TZ)
         idx = int((t - first).total_seconds() // (C.SLOT_MIN * 60))
