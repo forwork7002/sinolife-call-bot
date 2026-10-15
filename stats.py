@@ -23,10 +23,15 @@ class Slot:
     start: datetime
     end: datetime
     lunch: bool = False
+    extra: bool = False          # ish vaqtidan keyin (18:00+) — hisoblanadi, lekin baholanmaydi
+
+    @property
+    def work(self) -> bool:
+        return not self.lunch and not self.extra
 
     @property
     def factor(self) -> float:   # norma koeffitsienti (1.0 = 1 soat)
-        return 0.0 if self.lunch else (self.end - self.start).total_seconds() / 3600
+        return (self.end - self.start).total_seconds() / 3600 if self.work else 0.0
 
     def state(self, now: datetime) -> str:
         if now >= self.end:
@@ -106,13 +111,14 @@ class DayData:
 
 def day_slots(d: date) -> list[Slot]:
     cur = datetime.combine(d, C.WORK_START, tzinfo=C.TZ)
-    end = datetime.combine(d, C.WORK_END, tzinfo=C.TZ)
+    wend = datetime.combine(d, C.WORK_END, tzinfo=C.TZ)
+    end = max(wend, datetime.combine(d, C.EXTRA_END, tzinfo=C.TZ)) if C.EXTRA_END else wend
     ls = datetime.combine(d, C.LUNCH_START, tzinfo=C.TZ) if C.LUNCH_START and C.LUNCH_END else None
     le = datetime.combine(d, C.LUNCH_END, tzinfo=C.TZ) if ls else None
     out = []
     while cur < end:
-        nxt = min(cur + timedelta(minutes=C.SLOT_MIN), end)
-        out.append(Slot(cur, nxt, bool(ls and cur < le and nxt > ls)))
+        nxt = min(cur + timedelta(minutes=C.SLOT_MIN), wend if cur < wend else end)
+        out.append(Slot(cur, nxt, bool(ls and cur < le and nxt > ls), cur >= wend))
         cur = nxt
     return out
 
@@ -639,7 +645,8 @@ def seller_report(day: DayData, s: SellerDay, now: datetime) -> str:
             break
         b = total(s.buckets[i] for i in idx)
         f = sum(day.slots[i].factor for i in idx)
-        e = LIVE if any(st != "done" for st in states) else (grade(b, f) or LUNCH)
+        e = LIVE if any(st != "done" for st in states) else (
+            grade(b, f) or ("⭐" if day.slots[idx[0]].extra else LUNCH))
         label = f"{day.slots[idx[0]].start:%H:%M}–{day.slots[idx[-1]].end:%H:%M}"
         lines.append(f"<code>{label}</code> {e} {fmt_dur(b.talk_sec)} · {b.dozvon} dz · {b.attempts} q.")
     lines += flags_block([(s, ph, cs, t) for ph, cs, t in long_clients(s)])
@@ -669,10 +676,14 @@ def calls_report(day: DayData, s: SellerDay) -> str:
 def simple_report(day: DayData, sellers: list[SellerDay], now: datetime, title: str,
                   final: bool = False) -> str | None:
     """Eng kam gaplashganlar — telefonga mos jadval. Oddiy hisobot: oxirgi 1 soat; kun yakuni: butun kun."""
-    done = [i for i, sl in enumerate(day.slots) if sl.state(now) == "done" and not sl.lunch]
+    done = [i for i, sl in enumerate(day.slots) if sl.state(now) == "done" and sl.work]
     if not done or not sellers:
         return None
-    idx = done if final else done[-2:]
+    if final:
+        idx = done
+    else:   # oxirgi 1 soat (tushlik vaqti hisoblanmaydi): masalan 14:00 da — faqat 13:30–14:00
+        last = day.slots[done[-1]].end
+        idx = [i for i in done if day.slots[i].start >= last - timedelta(hours=1)]
     f = sum(day.slots[i].factor for i in idx)
     need_min = round(C.LEVELS[-1][2] * f)
     h0, h1 = day.slots[idx[0]].start, day.slots[idx[-1]].end
@@ -711,4 +722,73 @@ def simple_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
             src = "Face ID" if s.tp_in else "Bitrix24"
             when = f"{c:%H:%M} da keldi ({src})" if c else "keldi"
             lines.append(f"• {escape(s.name)} — {when}")
+    return "\n".join(lines)
+
+
+# ================= RAHBARGA KUNLIK HISOBOT (21:00) =================
+
+def evening_report(day: DayData, sellers: list[SellerDay], title: str = "Butun kompaniya") -> str | None:
+    """Bugun ishini qilmaganlar: ish vaqtida (tushlik va 18:00 dan keyingi vaqt hisoblanmaydi) normadan kam
+    gaplashganlar. 0 daqiqalilar kirmaydi — faqat real gaplashganlar. + qisqa tahlil + faxrli xodimlar."""
+    work = [i for i, sl in enumerate(day.slots) if sl.work]
+    extra = [i for i, sl in enumerate(day.slots) if sl.extra]
+    if not work or not sellers:
+        return None
+    f = sum(day.slots[i].factor for i in work)
+    need_min = round(C.LEVELS[-1][2] * f)
+    rows = [(total(s.buckets[i] for i in work), s) for s in sellers]
+    real = [(b, s) for b, s in rows if b.talk_sec >= 60]          # 0 lar kirmaydi
+    if not real:
+        return None
+    low = sorted([(b, s) for b, s in real if b.talk_sec < need_min * 60], key=lambda x: x[0].talk_sec)
+    ok = len(real) - len(low)
+    avg = sum(b.talk_sec for b, _ in real) // len(real) // 60
+    w0 = day.slots[work[0]].start
+    w1 = day.slots[work[-1]].end
+    lines = [f"📋 <b>KUNLIK HISOBOT · {day.day:%d.%m.%Y}</b>",
+             f"<b>{escape(title)}</b>",
+             f"🕘 Ish vaqti: <b>{w0:%H:%M} – {w1:%H:%M}</b>" + (
+                 f" (tushlik {C.LUNCH_START:%H:%M}–{C.LUNCH_END:%H:%M} hisoblanmaydi)" if C.LUNCH_START and C.LUNCH_END else ""),
+             f"🎯 Kunlik norma: kamida <b>{need_min} daqiqa</b> gaplashish",
+             "",
+             "📊 <b>Qisqa tahlil:</b>",
+             f"• Bugun ishlagan sotuvchilar: <b>{len(real)}</b>",
+             f"• Normani bajardi: <b>{ok}</b> ({round(100 * ok / len(real))}%)",
+             f"• Normani bajarmadi: <b>{len(low)}</b> ({round(100 * len(low) / len(real))}%)",
+             f"• 1 sotuvchiga o'rtacha: <b>{avg} daqiqa</b> gaplashuv"]
+    if low:
+        by_team: dict[str, list] = {}
+        for b, s in low:
+            by_team.setdefault(s.team or "Boshqa", []).append((b, s))
+        team_size = {}
+        for _, s in real:
+            team_size[s.team or "Boshqa"] = team_size.get(s.team or "Boshqa", 0) + 1
+        order = sorted(by_team.items(), key=lambda kv: -len(kv[1]) / max(1, team_size.get(kv[0], 1)))
+        if len(order) > 1:
+            lines += ["", "👥 <b>Jamoalar (normani bajarmaganlar):</b>"]
+            for t, rs in order:
+                lines.append(f"• {escape(t)} — <b>{len(rs)}</b> / {team_size.get(t, len(rs))} kishi")
+        lines += ["", f"🔻 <b>BUGUN ISHINI QILMAGANLAR ({len(low)}):</b>"]
+        for t, rs in order:
+            tbl = [f"{'№':>2} {'Sotuvchi':<10} {'Daq':>3} {'Jami':>4} {'Ulan':>4} {'Keldi':>5}", "─" * 33]
+            for k, (b, s) in enumerate(rs, 1):
+                c = s.came
+                tbl.append(escape(f"{k:>2} {short_name(s.name, 10):<10} {b.talk_sec // 60:>3} {b.attempts:>4} "
+                                  f"{b.dozvon:>4} " + (f"{c:%H:%M}" if c else "    —"), quote=False))
+            lines += ["", f"<b>{escape(t)}</b>", "<pre>" + "\n".join(tbl) + "</pre>"]
+        lines.append("<i>Daq — gaplashgan daqiqa · Jami — qo'ng'iroqlar · Ulan — javob berilgan · "
+                     "Keldi — ishga kelgan vaqti</i>")
+    else:
+        lines += ["", "✅ <b>Bugun hamma normani bajardi.</b>"]
+    # Faxrli xodimlar — ish vaqtidan keyin ham gaplashganlar
+    if extra:
+        fx = sorted(((total(s.buckets[i] for i in extra), s) for s in sellers), key=lambda x: -x[0].talk_sec)
+        fx = [(b, s) for b, s in fx if b.talk_sec >= 60]
+        if fx:
+            e0 = day.slots[extra[0]].start
+            lines += ["", f"⭐ <b>FAXRLI XODIMLAR — {e0:%H:%M} dan keyin ham ishlaganlar ({len(fx)}):</b>"]
+            for b, s in fx[:15]:
+                lines.append(f"• {escape(s.name)} — <b>{b.talk_sec // 60} daq</b> ({b.attempts} qo'ng'iroq)")
+            if len(fx) > 15:
+                lines.append(f"  … yana {len(fx) - 15} kishi")
     return "\n".join(lines)
