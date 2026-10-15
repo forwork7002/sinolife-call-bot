@@ -44,6 +44,9 @@ LUNCH_END = _hm("LUNCH_END", None)
 EXTRA_END = _hm("EXTRA_END", "22:00")
 # Rahbarga kunlik yakuniy hisobot (shaxsiy chatga, ADMIN_IDS)
 EVENING_REPORT = _hm("EVENING_REPORT", "21:00")
+# Kunlik hisobot qo'shimcha shu Telegram akkauntlarga ham boradi (vergul bilan, @ siz).
+# Akkaunt egasi botga bir marta /start yozishi kerak.
+REPORT_USERNAMES = [u.strip().lstrip("@").lower() for u in os.getenv("REPORT_USERNAMES", "Murod4656").split(",") if u.strip()]
 WORK_DAYS = {int(x) for x in os.getenv("WORK_DAYS", "1,2,3,4,5,6").split(",") if x}  # 1=dush ... 7=yaksh
 
 ADMIN_IDS = _ids("ADMIN_IDS")            # rahbar(lar)ning Telegram ID si
