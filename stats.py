@@ -701,8 +701,9 @@ def simple_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
              f"🕘 <b>{h0:%H:%M} – {h1:%H:%M}</b> oralig'i",
              f"🎯 Norma: kamida <b>{need_min} daqiqa</b> gaplashish",
              f"👥 Ishda: {len(rows)} · normadan kam: <b>{len(low)}</b>"]
+    plan_min = round(C.LEVELS[0][2] * f)          # plan: soatiga 30 daqiqa
     if not low:
-        lines += ["", "✅ Hamma normada."]
+        lines += ["", "✅ Hamma normada."] + plan_block(rows, plan_min, "shu vaqtda")
         return "\n".join(lines)
     tbl = [f"{'№':>2} {'Sotuvchi':<10} {'Daq':>3} {'Jami':>4} {'Ulan':>4} {'Keldi':>5}",
            "─" * 33]
@@ -722,7 +723,18 @@ def simple_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
             src = "Face ID" if s.tp_in else "Bitrix24"
             when = f"{c:%H:%M} da keldi ({src})" if c else "keldi"
             lines.append(f"• {escape(s.name)} — {when}")
+    lines += plan_block(rows, plan_min, "shu vaqtda")
     return "\n".join(lines)
+
+
+def plan_block(rows, plan_min: int, period: str) -> list[str]:
+    """✅ Planni bajarganlar (soatiga 30+ daqiqa) — ko'pi tepada."""
+    good = sorted([(b, s) for b, s in rows if b.talk_sec >= plan_min * 60], key=lambda x: -x[0].talk_sec)
+    if not good:
+        return []
+    out = ["", f"✅ <b>PLANNI BAJARDI ({period} {plan_min}+ daqiqa) — {len(good)} kishi:</b>"]
+    out += [f"✅ {escape(s.name)} — <b>{b.talk_sec // 60} daq</b>" for b, s in good]
+    return out
 
 
 # ================= RAHBARGA KUNLIK HISOBOT (21:00) =================
@@ -780,6 +792,7 @@ def evening_report(day: DayData, sellers: list[SellerDay], title: str = "Butun k
                      "Keldi — ishga kelgan vaqti</i>")
     else:
         lines += ["", "✅ <b>Bugun hamma normani bajardi.</b>"]
+    lines += plan_block(real, round(C.LEVELS[0][2] * f), "kuniga")
     # Faxrli xodimlar — ish vaqtidan keyin ham gaplashganlar
     if extra:
         fx = sorted(((total(s.buckets[i] for i in extra), s) for s in sellers), key=lambda x: -x[0].talk_sec)
