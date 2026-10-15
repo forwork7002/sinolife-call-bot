@@ -32,6 +32,50 @@ S.EXCLUDED.update(store.excluded_ids())
 _cache: dict[date, tuple[float, S.DayData]] = {}
 _lock = asyncio.Lock()
 _flag_sent: dict[tuple[int, date], set] = {}
+PRESENT_FILE = C.BASE_DIR / "present.json"
+
+
+def _load_present():
+    import json
+    try:
+        raw = json.loads(PRESENT_FILE.read_text("utf-8"))
+        today = datetime.now(C.TZ).date()
+        if raw.get("day") == today.isoformat():
+            S.PRESENT[today] = {int(k): datetime.fromisoformat(v) for k, v in raw.get("users", {}).items()}
+    except Exception:
+        pass
+
+
+def _save_present(d: date):
+    import json
+    try:
+        PRESENT_FILE.write_text(json.dumps({"day": d.isoformat(), "users": {
+            str(k): v.isoformat() for k, v in S.PRESENT.get(d, {}).items()}}), "utf-8")
+    except Exception:
+        log.exception("present.json yozilmadi")
+
+
+async def job_online(context: ContextTypes.DEFAULT_TYPE):
+    """Har 5 daqiqada: Bitrix24 da kim onlayn — shu bugun ishda deb hisoblanadi."""
+    now = datetime.now(C.TZ)
+    if now.isoweekday() not in C.WORK_DAYS or not (C.WORK_START <= now.time() < C.WORK_END):
+        return
+    try:
+        users = await bx.users(force=True)
+    except Exception:
+        log.exception("Onlayn tekshiruv: Bitrix'dan olib bo'lmadi")
+        return
+    d = now.date()
+    for k in [k for k in S.PRESENT if k != d]:
+        del S.PRESENT[k]
+    seen = S.PRESENT.setdefault(d, {})
+    new = 0
+    for uid, u in users.items():
+        if str(u.get("IS_ONLINE")) == "Y" and S._active(u) and uid not in seen:
+            seen[uid] = now
+            new += 1
+    if new:
+        _save_present(d)
 
 KB = ReplyKeyboardMarkup([["📊 Holat", "👤 Sotuvchi"], ["📅 Kecha"]], resize_keyboard=True)
 
@@ -617,6 +661,8 @@ def main():
     add(CallbackQueryHandler(on_exclude, pattern=r"^x:"))
     app.add_error_handler(on_error)
     schedule(app)
+    _load_present()
+    app.job_queue.run_repeating(job_online, interval=300, first=5)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
