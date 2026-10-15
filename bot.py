@@ -13,7 +13,7 @@ from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup,
                       ReplyParameters, Update)
 from telegram.constants import ChatType, ParseMode
 from telegram.error import ChatMigrated, Forbidden
-from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, TypeHandler,
                           ContextTypes, MessageHandler, filters)
 
 import config as C
@@ -296,6 +296,12 @@ def admin_only(fn):
 # ================= buyruqlar =================
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if (update.effective_chat.type == ChatType.PRIVATE and u and u.username
+            and u.username.lower() in C.REPORT_USERNAMES and u.id not in C.ADMIN_IDS):
+        await update.effective_message.reply_text(
+            f"✅ Ulandingiz. Har kuni {C.EVENING_REPORT:%H:%M} da shu yerga kunlik hisobot keladi.")
+        return
     if not await can_use(update, context):
         return   # guruhdagi oddiy a'zo — tugmalar ochilmaydi
     sc = scope_of(update)
@@ -654,6 +660,25 @@ async def job_report(context: ContextTypes.DEFAULT_TYPE):
             log.exception("Yuborib bo'lmadi: %s", cid)
 
 
+def evening_recipients() -> list[int]:
+    """Kunlik hisobot oluvchilar: ADMIN_IDS + REPORT_USERNAMES (botga /start yozgan bo'lsa)."""
+    out = list(C.ADMIN_IDS)
+    for u in C.REPORT_USERNAMES:
+        cid = store.users.get(u)
+        if cid:
+            out.append(cid)
+        else:
+            log.warning("Kunlik hisobot: @%s hali botga /start yozmagan — yuborib bo'lmaydi", u)
+    return list(dict.fromkeys(out))
+
+
+async def track_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shaxsiy chatda botga yozgan har bir odamni eslab qoladi (username -> chat id)."""
+    u, chat = update.effective_user, update.effective_chat
+    if u and chat and chat.type == ChatType.PRIVATE:
+        store.remember_user(u.username, chat.id)
+
+
 async def job_evening(context: ContextTypes.DEFAULT_TYPE):
     """Har kuni EVENING_REPORT (21:00) da rahbarga (ADMIN_IDS) — bugun ishini qilmaganlar + tahlil."""
     now = datetime.now(C.TZ)
@@ -667,7 +692,7 @@ async def job_evening(context: ContextTypes.DEFAULT_TYPE):
     text = S.evening_report(day, S.team(day, None))
     if not text:
         return
-    for aid in C.ADMIN_IDS:
+    for aid in evening_recipients():
         try:
             await send_long(context.bot, aid, text)
         except Exception:
@@ -702,7 +727,7 @@ def schedule(app: Application):
             continue
         times.append(f"{t:%H:%M}")
         app.job_queue.run_daily(job_report, time=t.timetz(), days=days)
-    if C.EVENING_REPORT and C.ADMIN_IDS:
+    if C.EVENING_REPORT and (C.ADMIN_IDS or C.REPORT_USERNAMES):
         app.job_queue.run_daily(job_evening, time=C.EVENING_REPORT.replace(tzinfo=C.TZ), days=days)
     log.info("Guruhlarga hisobot: %s · rahbarga kunlik: %s", ", ".join(times), C.EVENING_REPORT)
 
@@ -732,6 +757,7 @@ def main():
         sys.exit(".env faylida BOT_TOKEN va BITRIX_WEBHOOK bo'lishi kerak")
     app = Application.builder().token(C.BOT_TOKEN).post_init(post_init).build()
     add = app.add_handler
+    app.add_handler(TypeHandler(Update, track_user), group=-1)   # kim yozganini eslab qolish
     add(CommandHandler("start", cmd_start))
     add(CommandHandler("id", cmd_id))
     add(CommandHandler("holat", cmd_status))
