@@ -740,80 +740,56 @@ def plan_block(rows, plan_min: int, period: str) -> list[str]:
 # ================= RAHBARGA KUNLIK HISOBOT (21:00) =================
 
 def evening_report(day: DayData, sellers: list[SellerDay], title: str = "Butun kompaniya") -> str | None:
-    """Bugun ishini qilmaganlar: ish vaqtida (tushlik va 18:00 dan keyingi vaqt hisoblanmaydi) normadan kam
-    gaplashganlar. 0 daqiqalilar kirmaydi — faqat real gaplashganlar. + qisqa tahlil + faxrli xodimlar."""
+    """Rahbar uchun QISQA kunlik hisobot: xulosa, eng zo'rlar, eng kamlar, 18:00 dan keyin ishlaganlar.
+    Ish vaqti (tushliksiz) bo'yicha baholanadi; 0 daqiqalilar kirmaydi."""
     work = [i for i, sl in enumerate(day.slots) if sl.work]
-    extra = [i for i, sl in enumerate(day.slots) if sl.extra]
+    extra = [i for i, sl in enumerate(day.slots) if sl.extra
+             and (not C.EVENING_REPORT or sl.start.time() < C.EVENING_REPORT)]
     if not work or not sellers:
         return None
     f = sum(day.slots[i].factor for i in work)
-    need_min = round(C.LEVELS[-1][2] * f)
-    rows = [(total(s.buckets[i] for i in work), s) for s in sellers]
-    real = [(b, s) for b, s in rows if b.talk_sec >= 60]          # 0 lar kirmaydi
+    need_min = round(C.LEVELS[-1][2] * f)      # norma (soatiga 20 daq)
+    plan_min = round(C.LEVELS[0][2] * f)       # plan (soatiga 30 daq)
+    real = [(total(s.buckets[i] for i in work), s) for s in sellers]
+    real = [(b, s) for b, s in real if b.talk_sec >= 60]          # 0 lar kirmaydi
     if not real:
         return None
     low = sorted([(b, s) for b, s in real if b.talk_sec < need_min * 60], key=lambda x: x[0].talk_sec)
-    ok = len(real) - len(low)
-    avg = sum(b.talk_sec for b, _ in real) // len(real) // 60
-    w0 = day.slots[work[0]].start
-    w1 = day.slots[work[-1]].end
+    plan_ok = sum(1 for b, _ in real if b.talk_sec >= plan_min * 60)
+    w0, w1 = day.slots[work[0]].start, day.slots[work[-1]].end
     lines = [f"📋 <b>KUNLIK HISOBOT · {day.day:%d.%m.%Y}</b>",
-             f"<b>{escape(title)}</b>",
-             f"🕘 Ish vaqti: <b>{w0:%H:%M} – {w1:%H:%M}</b>" + (
-                 f" (tushlik {C.LUNCH_START:%H:%M}–{C.LUNCH_END:%H:%M} hisoblanmaydi)" if C.LUNCH_START and C.LUNCH_END else ""),
-             f"🎯 Kunlik norma: kamida <b>{need_min} daqiqa</b> gaplashish",
+             f"🕘 {w0:%H:%M}–{w1:%H:%M} · norma <b>{need_min}</b> daq · plan <b>{plan_min}</b> daq",
              "",
-             "📊 <b>Qisqa tahlil:</b>",
-             f"• Bugun ishlagan sotuvchilar: <b>{len(real)}</b>",
-             f"• Normani bajardi: <b>{ok}</b> ({round(100 * ok / len(real))}%)",
-             f"• Normani bajarmadi: <b>{len(low)}</b> ({round(100 * len(low) / len(real))}%)",
-             f"• Planni bajardi (kuniga {round(C.LEVELS[0][2] * f)}+ daq): "
-             f"<b>{sum(1 for b, _ in real if b.talk_sec >= round(C.LEVELS[0][2] * f) * 60)}</b> kishi ✅",
-             f"• 1 sotuvchiga o'rtacha: <b>{avg} daqiqa</b> gaplashuv"]
+             f"👥 Ishladi: <b>{len(real)}</b>   ✅ Plan: <b>{plan_ok}</b>   🔴 Normadan kam: <b>{len(low)}</b>"]
+
+    best = sorted(real, key=lambda x: -x[0].talk_sec)[:5]
+    medals = ["🥇", "🥈", "🥉", "4.", "5."]
+    lines += ["", "🏆 <b>ENG ZO'R</b>"]
+    for k, (b, s) in enumerate(best):
+        lines.append(f"{medals[k]} {escape(s.name)} — <b>{b.talk_sec // 60} daq</b>"
+                     + (" ✅" if b.talk_sec >= plan_min * 60 else ""))
+
     if low:
-        by_team: dict[str, list] = {}
-        for b, s in low:
-            by_team.setdefault(s.team or "Boshqa", []).append((b, s))
-        team_size = {}
-        for _, s in real:
-            team_size[s.team or "Boshqa"] = team_size.get(s.team or "Boshqa", 0) + 1
-        order = sorted(by_team.items(), key=lambda kv: -len(kv[1]) / max(1, team_size.get(kv[0], 1)))
-        if len(order) > 1:
-            lines += ["", "👥 <b>Jamoalar (normani bajarmaganlar):</b>"]
-            for t, rs in order:
-                lines.append(f"• {escape(t)} — <b>{len(rs)}</b> / {team_size.get(t, len(rs))} kishi")
-        lines += ["", f"🔻 <b>BUGUN ISHINI QILMAGANLAR ({len(low)}):</b>"]
-        for t, rs in order:
-            tbl = [f"{'№':>2} {'Sotuvchi':<10} {'Daq':>3} {'Jami':>4} {'Ulan':>4} {'Keldi':>5}", "─" * 33]
-            for k, (b, s) in enumerate(rs, 1):
-                c = s.came
-                tbl.append(escape(f"{k:>2} {short_name(s.name, 10):<10} {b.talk_sec // 60:>3} {b.attempts:>4} "
-                                  f"{b.dozvon:>4} " + (f"{c:%H:%M}" if c else "    —"), quote=False))
-            lines += ["", f"<b>{escape(t)}</b>", "<pre>" + "\n".join(tbl) + "</pre>"]
-        lines.append("<i>Daq — gaplashgan daqiqa · Jami — qo'ng'iroqlar · Ulan — javob berilgan · "
-                     "Keldi — ishga kelgan vaqti</i>")
+        show = low[:10]
+        tbl = [f"{'№':>2} {'Sotuvchi':<12} {'Daq':>3} {'Qo`ng':>5}", "─" * 26]
+        for k, (b, s) in enumerate(show, 1):
+            tbl.append(escape(f"{k:>2} {short_name(s.name, 12):<12} {b.talk_sec // 60:>3} {b.attempts:>5}",
+                              quote=False))
+        lines += ["", f"🔻 <b>ENG KAM GAPLASHGANLAR</b>", "<pre>" + "\n".join(tbl) + "</pre>"]
+        if len(low) > len(show):
+            lines.append(f"<i>…yana {len(low) - len(show)} kishi normadan kam</i>")
     else:
         lines += ["", "✅ <b>Bugun hamma normani bajardi.</b>"]
-    # Eng zo'r xodimlar — eng ko'p gaplashganlar (TOP-10), planni bajarganlarga ✅
-    plan_min = round(C.LEVELS[0][2] * f)
-    best = sorted(real, key=lambda x: -x[0].talk_sec)[:10]
-    if best:
-        medals = ["🥇", "🥈", "🥉"]
-        lines += ["", f"🏆 <b>ENG ZO'R XODIMLAR (TOP-{len(best)}):</b>"]
-        for k, (b, s) in enumerate(best):
-            m = medals[k] if k < 3 else f"{k + 1}."
-            mark = " ✅" if b.talk_sec >= plan_min * 60 else ""
-            team = f" · <i>{escape(s.team)}</i>" if s.team else ""
-            lines.append(f"{m} {escape(s.name)} — <b>{b.talk_sec // 60} daq</b>{mark}{team}")
-    # Faxrli xodimlar — ish vaqtidan keyin ham gaplashganlar
+
     if extra:
         fx = sorted(((total(s.buckets[i] for i in extra), s) for s in sellers), key=lambda x: -x[0].talk_sec)
         fx = [(b, s) for b, s in fx if b.talk_sec >= 60]
         if fx:
             e0 = day.slots[extra[0]].start
-            lines += ["", f"⭐ <b>FAXRLI XODIMLAR — {e0:%H:%M} dan keyin ham ishlaganlar ({len(fx)}):</b>"]
-            for b, s in fx[:15]:
-                lines.append(f"• {escape(s.name)} — <b>{b.talk_sec // 60} daq</b> ({b.attempts} qo'ng'iroq)")
-            if len(fx) > 15:
-                lines.append(f"  … yana {len(fx) - 15} kishi")
+            e1 = day.slots[extra[-1]].end
+            lines += ["", f"⭐ <b>{e0:%H:%M}–{e1:%H:%M} ISHLAGANLAR ({len(fx)})</b>"]
+            for b, s in fx[:10]:
+                lines.append(f"• {escape(s.name)} — <b>{b.talk_sec // 60} daq</b>")
+            if len(fx) > 10:
+                lines.append(f"<i>…yana {len(fx) - 10} kishi</i>")
     return "\n".join(lines)
