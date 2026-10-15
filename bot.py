@@ -247,10 +247,8 @@ async def cmd_status(update, context, title, deps):
     day = await get_day(now.date())
     await msg.delete()
     sel = S.team(day, deps)
-    ids = await send_long(context.bot, chat.id, S.status_report(day, sel, now, title, recent_live=True),
-                          None if _group(chat) else KB)
-    if (hr := S.hour_report(day, sel, now, title)):
-        ids += await send_long(context.bot, chat.id, hr)
+    text = S.simple_report(day, sel, now, title) or "Hali tugagan soat yo'q."
+    ids = await send_long(context.bot, chat.id, text, None if _group(chat) else KB)
     remember(chat, ids)
 
 
@@ -263,8 +261,8 @@ async def cmd_yesterday(update, context, title, deps):
     day = await get_day(d)
     end = datetime.combine(d, C.WORK_END, tzinfo=C.TZ)
     await msg.delete()
-    ids = await send_long(context.bot, chat.id, S.status_report(day, S.team(day, deps), end, title, final=True),
-                          None if _group(chat) else KB)
+    text = S.simple_report(day, S.team(day, deps), end, title, final=True) or "Kecha ma'lumot yo'q."
+    ids = await send_long(context.bot, chat.id, text, None if _group(chat) else KB)
     remember(chat, ids)
 
 
@@ -425,7 +423,7 @@ async def on_bind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     day = await get_day(now.date(), force=True)
     sel = S.team(day, set(dep_list) if dep_list else None)
     # Eski versiyadan qolgan, hammaga ko'rinadigan tugmalarni guruhdan tozalaymiz
-    await send_long(context.bot, chat_id, S.status_report(day, sel, now, title, recent_live=True),
+    await send_long(context.bot, chat_id, S.simple_report(day, sel, now, title) or "✅ Ulandi.",
                     ReplyKeyboardRemove())
 
 
@@ -508,10 +506,9 @@ async def cmd_send_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sel = S.team(day, set(g["deps"]) if g.get("deps") else None)
         try:
             # ReplyKeyboardRemove — eski versiyadan qolgan, hammaga ko'rinadigan tugmalarni tozalaydi
-            await send_long(context.bot, int(cid), S.status_report(day, sel, now, g["title"], recent_live=True),
-                            ReplyKeyboardRemove())
-            if (hr := S.hour_report(day, sel, now, g["title"])):
-                await send_long(context.bot, int(cid), hr)
+            text = S.simple_report(day, sel, now, g["title"])
+            if text:
+                await send_long(context.bot, int(cid), text, ReplyKeyboardRemove())
             ok += 1
         except Exception as e:
             log.exception("Yuborib bo'lmadi: %s", cid)
@@ -544,18 +541,11 @@ async def job_report(context: ContextTypes.DEFAULT_TYPE):
         cid = int(cid)
         deps = set(g["deps"]) if g.get("deps") else None
         sel = S.team(day, deps)
-        flags = None
-        if not final:   # oraliq hisobotda faqat YANGI ogohlantirishlar
-            sent = _flag_sent.setdefault((cid, day.day), set())
-            flags = []
-            for s in sel:
-                for ph, cs, t in S.long_clients(s):
-                    if (s.uid, ph) not in sent:
-                        sent.add((s.uid, ph))
-                        flags.append((s, ph, cs, t))
-        texts = [S.status_report(day, sel, now, g["title"], final=final, flags=flags)]
-        if not final and (hr := S.hour_report(day, sel, now, g["title"])):
-            texts.append(hr)
+        # Oddiy: oxirgi 1 soatda eng kam gaplashganlar; ish kuni oxirida — butun kun bo'yicha ham
+        texts = [t for t in (S.simple_report(day, sel, now, g["title"]),
+                             S.simple_report(day, sel, now, g["title"], final=True) if final else None) if t]
+        if not texts:
+            continue
         try:
             for text in texts:
                 await send_long(context.bot, cid, text)
