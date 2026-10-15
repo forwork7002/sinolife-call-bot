@@ -767,6 +767,8 @@ def evening_report(day: DayData, sellers: list[SellerDay], title: str = "Butun k
              f"• Bugun ishlagan sotuvchilar: <b>{len(real)}</b>",
              f"• Normani bajardi: <b>{ok}</b> ({round(100 * ok / len(real))}%)",
              f"• Normani bajarmadi: <b>{len(low)}</b> ({round(100 * len(low) / len(real))}%)",
+             f"• Planni bajardi (kuniga {round(C.LEVELS[0][2] * f)}+ daq): "
+             f"<b>{sum(1 for b, _ in real if b.talk_sec >= round(C.LEVELS[0][2] * f) * 60)}</b> kishi ✅",
              f"• 1 sotuvchiga o'rtacha: <b>{avg} daqiqa</b> gaplashuv"]
     if low:
         by_team: dict[str, list] = {}
@@ -792,7 +794,17 @@ def evening_report(day: DayData, sellers: list[SellerDay], title: str = "Butun k
                      "Keldi — ishga kelgan vaqti</i>")
     else:
         lines += ["", "✅ <b>Bugun hamma normani bajardi.</b>"]
-    lines += plan_block(real, round(C.LEVELS[0][2] * f), "kuniga")
+    # Eng zo'r xodimlar — eng ko'p gaplashganlar (TOP-10), planni bajarganlarga ✅
+    plan_min = round(C.LEVELS[0][2] * f)
+    best = sorted(real, key=lambda x: -x[0].talk_sec)[:10]
+    if best:
+        medals = ["🥇", "🥈", "🥉"]
+        lines += ["", f"🏆 <b>ENG ZO'R XODIMLAR (TOP-{len(best)}):</b>"]
+        for k, (b, s) in enumerate(best):
+            m = medals[k] if k < 3 else f"{k + 1}."
+            mark = " ✅" if b.talk_sec >= plan_min * 60 else ""
+            team = f" · <i>{escape(s.team)}</i>" if s.team else ""
+            lines.append(f"{m} {escape(s.name)} — <b>{b.talk_sec // 60} daq</b>{mark}{team}")
     # Faxrli xodimlar — ish vaqtidan keyin ham gaplashganlar
     if extra:
         fx = sorted(((total(s.buckets[i] for i in extra), s) for s in sellers), key=lambda x: -x[0].talk_sec)
