@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import time as _time
+from difflib import SequenceMatcher
 from datetime import date, datetime
 
 import httpx
@@ -137,9 +138,19 @@ _CYR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэ�
                  "s", "t", "u", "f", "x", "ts", "ch", "sh", "sh", "", "i", "", "e", "yu", "ya", "o", "q", "g", "h"]))
 
 
+# lotin so'z ichiga adashib yozilgan kirill harflar (ko'rinishi bir xil): "Наmrоуеv" -> "hamroyev"
+_LOOK = dict(zip("аеорсухкмтнві", "aeopcyxkmthbi"))
+
+
+def _word_tr(w: str) -> str:
+    if re.search(r"[a-z]", w) and re.search(r"[а-яёўқғҳ]", w):
+        w = "".join(_LOOK.get(ch, ch) for ch in w)
+    return "".join(_CYR.get(ch, ch) for ch in w)
+
+
 def name_key(name: str) -> frozenset:
     """'Alimova Nafisa 221' / 'Нафиса Алимова' -> {'alimova','nafisa'} (tartibsiz, raqamsiz)."""
-    s = "".join(_CYR.get(ch, ch) for ch in (name or "").lower())
+    s = " ".join(_word_tr(w) for w in (name or "").lower().split())
     s = re.sub(r"[`'ʻʼ‘’]", "", s)
     return frozenset(w for w in re.split(r"[^a-z]+", s) if len(w) >= 2)
 
@@ -149,19 +160,55 @@ def phone_key(p) -> str:
     return d[-9:] if len(d) >= 9 else ""
 
 
-def match_bitrix(tp_emp: dict, att_item: dict, bx_users: dict[int, dict], active) -> int | None:
-    """TimePay xodimini Bitrix24 foydalanuvchisiga moslaydi: avval telefon, keyin ism (kamida 2 so'z mos).
-    Bir nechta nomzod chiqsa — moslamaydi (xato odamni ko'rsatmaslik uchun)."""
-    ph = phone_key(tp_emp.get("phone_number"))
-    if ph:
-        hits = [uid for uid, u in bx_users.items() if active(u) and ph in {
-            phone_key(u.get(k)) for k in ("PERSONAL_MOBILE", "PERSONAL_PHONE", "WORK_PHONE", "UF_PHONE_INNER")}]
+def _norm(w: str) -> str:
+    return w.replace("kh", "x").replace("h", "x").replace("w", "v")
+
+
+def _same(a: str, b: str) -> bool:
+    """Bir xil so'zmi — 1-2 harf farqiga chidamli (Saparboyeva ~ Safarboyeva, Mahmudova ~ Maxmudova)."""
+    a, b = _norm(a), _norm(b)
+    if a == b:
+        return True
+    return len(a) >= 4 and len(b) >= 4 and a[0] == b[0] and SequenceMatcher(None, a, b).ratio() >= 0.8
+
+
+def _score(k1: frozenset, k2: frozenset) -> int:
+    used, n = set(), 0
+    for w in k1:
+        for v in k2:
+            if v not in used and _same(w, v):
+                used.add(v)
+                n += 1
+                break
+    return n
+
+
+def match_bitrix(tp_emp: dict, att_item: dict, bx_users: dict[int, dict], prefer: set[int] | None = None) -> int | None:
+    """TimePay xodimini Bitrix24 sotuvchisiga moslaydi (bx_users — faqat aktiv sotuvchilar).
+    1) telefon raqami; 2) ism-familiya (kamida 2 so'z mos, 1-2 harf farqiga chidamli).
+    Bir nechta nomzod bo'lsa — bugun ishlagani (prefer) tanlanadi; baribir aniq bo'lmasa — moslamaydi."""
+    def pick(hits: list[int]) -> int | None:
         if len(hits) == 1:
             return hits[0]
+        if prefer:
+            p = [h for h in hits if h in prefer]
+            if len(p) == 1:
+                return p[0]
+        return None
+
+    ph = phone_key(tp_emp.get("phone_number"))
+    if ph:
+        hits = [uid for uid, u in bx_users.items() if ph in {
+            phone_key(u.get(k)) for k in ("PERSONAL_MOBILE", "PERSONAL_PHONE", "WORK_PHONE", "UF_PHONE_INNER")}]
+        if (r := pick(hits)) is not None:
+            return r
     full = att_item.get("full_name") or f"{tp_emp.get('first_name') or ''} {tp_emp.get('last_name') or ''}"
     k = name_key(full)
     if len(k) < 2:
         return None
-    hits = [uid for uid, u in bx_users.items()
-            if active(u) and len(k & name_key(f"{u.get('NAME') or ''} {u.get('LAST_NAME') or ''}")) >= 2]
-    return hits[0] if len(hits) == 1 else None
+    scored = [(_score(k, name_key(f"{u.get('NAME') or ''} {u.get('LAST_NAME') or ''} {u.get('SECOND_NAME') or ''}")), uid)
+              for uid, u in bx_users.items()]
+    best = max((sc for sc, _ in scored), default=0)
+    if best < 2:
+        return None
+    return pick([uid for sc, uid in scored if sc == best])
