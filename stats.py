@@ -631,3 +631,30 @@ def calls_report(day: DayData, s: SellerDay) -> str:
         lines.append("Ulangan qo'ng'iroq yo'q.")
     lines += ["", f"Ulanmagan (javob berilmagan) qo'ng'iroqlar: {missed} ta"]
     return "\n".join(lines)
+
+
+# ================= ODDIY HISOBOT: faqat eng kam gaplashganlar =================
+
+def simple_report(day: DayData, sellers: list[SellerDay], now: datetime, title: str,
+                  final: bool = False) -> str | None:
+    """Faqat normadan kam gaplashgan sotuvchilar: ism — necha daqiqa gaplashgan.
+    Oddiy hisobot — oxirgi 1 soat; kun yakuni — butun kun."""
+    done = [i for i, sl in enumerate(day.slots) if sl.state(now) == "done" and not sl.lunch]
+    if not done or not sellers:
+        return None
+    idx = done if final else done[-2:]
+    f = sum(day.slots[i].factor for i in idx)
+    need_min = C.LEVELS[-1][2] * f
+    h0, h1 = day.slots[idx[0]].start, day.slots[idx[-1]].end
+    rows = sorted(((total(s.buckets[i] for i in idx).talk_sec, s) for s in sellers), key=lambda x: x[0])
+    low = [(t, s) for t, s in rows if t < need_min * 60]
+    head = "🏁 KUN YAKUNI" if final else "⏱ ENG KAM GAPLASHGANLAR"
+    lines = [f"<b>{head} · {escape(title)}</b>",
+             f"🕘 {h0:%H:%M}–{h1:%H:%M} · norma: {_num(round(need_min))} daqiqa"]
+    if not low:
+        lines += ["", f"✅ Hamma normada ({len(rows)} sotuvchi)."]
+        return "\n".join(lines)
+    lines.append("")
+    for k, (t, s) in enumerate(low, 1):
+        lines.append(f"{k}. {escape(s.name)} — <b>{t // 60} daq</b>")
+    return "\n".join(lines)
