@@ -65,8 +65,8 @@ class Bitrix:
             "SORT": "ID", "ORDER": "ASC",
         })
 
-    async def users(self) -> dict[int, dict]:
-        if self._users and _time.time() - self._users_at < 3600:
+    async def users(self, force: bool = False) -> dict[int, dict]:
+        if self._users and not force and _time.time() - self._users_at < 3600:
             return self._users
         rows = await self.list_all("user.get", {})
         self._users = {int(u["ID"]): u for u in rows}
