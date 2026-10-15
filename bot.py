@@ -29,7 +29,7 @@ log = logging.getLogger("bot")
 
 bx = Bitrix(C.BITRIX_WEBHOOK)
 tp = TPM.TimePay(C.TIMEPAY_LOGIN, C.TIMEPAY_PASSWORD, C.TIMEPAY_LOGIN_FIELD)
-_tp_map: dict[int, int | None] = {}     # TimePay xodim ID -> Bitrix ID
+_tp_map: dict[int, int] = {}     # TimePay xodim ID -> Bitrix ID
 store = Store(C.STATE_FILE)
 S.EXCLUDED.update(store.excluded_ids())
 _cache: dict[date, tuple[float, S.DayData]] = {}
@@ -91,6 +91,13 @@ async def sync_timepay(d: date, users: dict) -> tuple[int, int, int]:
     Qaytaradi: (TimePay dagi xodimlar, bugun kelganlar, Bitrix24 ga moslanganlar)."""
     att = await tp.daily_attendance(d)
     emps = await tp.employees(d)
+    sales = S.sales_deps(await bx.departments())
+    sellers = {uid: u for uid, u in users.items() if S._active(u) and (not sales or S._udeps(u) & sales)}
+    # bugun ishlaganlar (onlayn yoki qo'ng'iroq qilgan) — bir xil ismli 2 akkaunt bo'lsa shular tanlanadi
+    prefer = set(S.PRESENT.get(d, {}))
+    hit = _cache.get(d)
+    if hit:
+        prefer |= {uid for uid, s in hit[1].sellers.items() if s.calls}
     out: dict[int, tuple] = {}
     came = 0
     for it in att:
@@ -100,9 +107,11 @@ async def sync_timepay(d: date, users: dict) -> tuple[int, int, int]:
             continue
         came += 1
         tid = int(it.get("id") or 0)
-        if tid not in _tp_map:
-            _tp_map[tid] = TPM.match_bitrix(emps.get(tid, {}), it, users, S._active)
-        uid = _tp_map[tid]
+        uid = _tp_map.get(tid)
+        if uid is None:
+            uid = TPM.match_bitrix(emps.get(tid, {}), it, sellers, prefer)
+            if uid:
+                _tp_map[tid] = uid      # faqat topilganini eslab qolamiz
         if uid:
             out[uid] = (t_in, TPM.parse_time(st.get("last_check_out"), d, C.TZ))
     S.TP[d] = out
