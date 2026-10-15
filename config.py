@@ -27,6 +27,10 @@ def _hm(name: str, default: str | None) -> time | None:
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+# TimePay (Face ID davomat) — ixtiyoriy. Bo'sh bo'lsa TimePay ishlatilmaydi.
+TIMEPAY_LOGIN = os.getenv("TIMEPAY_LOGIN", "").strip()
+TIMEPAY_PASSWORD = os.getenv("TIMEPAY_PASSWORD", "").strip()
+TIMEPAY_LOGIN_FIELD = os.getenv("TIMEPAY_LOGIN_FIELD", "").strip()   # username yoki phone_number
 BITRIX_WEBHOOK = os.getenv("BITRIX_WEBHOOK", "")
 _u = urlparse(BITRIX_WEBHOOK)
 PORTAL_URL = f"{_u.scheme}://{_u.netloc}"
