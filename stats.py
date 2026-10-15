@@ -82,12 +82,19 @@ class SellerDay:
     calls: list = field(default_factory=list)
     team: str = ""          # ROP jamoasi nomi (masalan "Sevinch (ROP)")
     seen: datetime | None = None   # Bitrix24 da birinchi marta onlayn ko'rilgan vaqt
+    tp_in: datetime | None = None  # TimePay (Face ID) — kelgan vaqti
+    tp_out: datetime | None = None # TimePay (Face ID) — ketgan vaqti
 
     @property
     def started(self) -> datetime | None:
-        """Bugun ishni qachon boshlagan: birinchi qo'ng'iroq yoki Bitrix24 da onlayn bo'lgan vaqt."""
-        ts = [c.start for c in self.calls] + ([self.seen] if self.seen else [])
+        """Bugun ishni qachon boshlagan: TimePay, birinchi qo'ng'iroq yoki Bitrix24 onlayn — eng ertasi."""
+        ts = [c.start for c in self.calls] + [t for t in (self.seen, self.tp_in) if t]
         return min(ts) if ts else None
+
+    @property
+    def came(self) -> datetime | None:
+        """Ishga kelgan vaqt: TimePay bo'lsa — o'sha, bo'lmasa — ishni boshlagan vaqt."""
+        return self.tp_in or self.started
 
 
 @dataclass
@@ -193,6 +200,8 @@ def sales_deps(deps: dict[int, dict]) -> set[int]:
 # Bugun ishda ekani aniqlangan xodimlar: kun -> {Bitrix ID: birinchi ko'rilgan vaqt}
 # (Bitrix24 da onlayn bo'lgan — bot har 5 daqiqada tekshirib boradi)
 PRESENT: dict[date, dict[int, datetime]] = {}
+# TimePay (Face ID): kun -> {Bitrix ID: (kelgan vaqt, ketgan vaqt yoki None)}
+TP: dict[date, dict[int, tuple]] = {}
 
 
 async def build_day(bx, d: date, member_deps: set[int]) -> DayData:
@@ -232,6 +241,11 @@ async def build_day(bx, d: date, member_deps: set[int]) -> DayData:
     for uid, seen in PRESENT.get(d, {}).items():
         if is_seller(uid):
             get(uid).seen = seen
+    #   3) bugun TimePay (Face ID) dan o'tganlar
+    for uid, (t_in, t_out) in TP.get(d, {}).items():
+        if is_seller(uid):
+            s = get(uid)
+            s.tp_in, s.tp_out = t_in, t_out
     first = slots[0].start
     for c in calls:
         try:
@@ -654,7 +668,7 @@ def calls_report(day: DayData, s: SellerDay) -> str:
 
 def simple_report(day: DayData, sellers: list[SellerDay], now: datetime, title: str,
                   final: bool = False) -> str | None:
-    """Eng kam gaplashganlar — jadval. Oddiy hisobot: oxirgi 1 soat; kun yakuni: butun kun."""
+    """Eng kam gaplashganlar — telefonga mos jadval. Oddiy hisobot: oxirgi 1 soat; kun yakuni: butun kun."""
     done = [i for i, sl in enumerate(day.slots) if sl.state(now) == "done" and not sl.lunch]
     if not done or not sellers:
         return None
@@ -662,32 +676,39 @@ def simple_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
     f = sum(day.slots[i].factor for i in idx)
     need_min = round(C.LEVELS[-1][2] * f)
     h0, h1 = day.slots[idx[0]].start, day.slots[idx[-1]].end
-    # shu davr tugagandan keyin ishga kelganlar bu davrda hisoblanmaydi
-    sellers = [s for s in sellers if s.started and s.started < h1]
+    # shu davr tugagandan keyin kelganlar va davr boshlanishidan oldin ketganlar hisoblanmaydi
+    sellers = [s for s in sellers if s.started and s.started < h1
+               and not (s.tp_out and s.tp_in and s.tp_out > s.tp_in and s.tp_out <= h0 and not final)]
     if not sellers:
         return None
     rows = sorted(((total(s.buckets[i] for i in idx), s) for s in sellers),
                   key=lambda x: (x[0].talk_sec, x[0].attempts))
     low = [(b, s) for b, s in rows if b.talk_sec < need_min * 60]
     head = "🏁 KUN YAKUNI" if final else "⏱ ENG KAM GAPLASHGANLAR"
-    lines = [f"<b>{head} · {escape(title)}</b>",
-             f"🕘 Hisoblangan vaqt: <b>{h0:%H:%M} dan {h1:%H:%M} gacha</b>",
-             f"🎯 Norma: shu vaqtda kamida <b>{need_min} daqiqa</b> gaplashish",
-             f"👥 Bugun ishda: {len(rows)} sotuvchi · normadan kam: <b>{len(low)}</b>"]
+    lines = [f"<b>{head}</b>",
+             f"<b>{escape(title)}</b>",
+             f"🕘 <b>{h0:%H:%M} – {h1:%H:%M}</b> oralig'i",
+             f"🎯 Norma: kamida <b>{need_min} daqiqa</b> gaplashish",
+             f"👥 Ishda: {len(rows)} · normadan kam: <b>{len(low)}</b>"]
     if not low:
         lines += ["", "✅ Hamma normada."]
         return "\n".join(lines)
-    tbl = [f"{'№':>2} {'Sotuvchi':<13} {'Daq':>4} {'Qo`ng':>5} {'Keldi':>5}", "─" * 32]
+    tbl = [f"{'№':>2} {'Sotuvchi':<10} {'Daq':>3} {'Jami':>4} {'Ulan':>4} {'Keldi':>5}",
+           "─" * 33]
     for k, (b, s) in enumerate(low, 1):
-        st = s.started
-        nm = short_name(s.name, 13)
-        tbl.append(escape(f"{k:>2} {nm:<13} {b.talk_sec // 60:>4} {b.attempts:>5} "
-                          + (f"{st:%H:%M}" if st else "    —"), quote=False))
-    lines += ["", "<pre>" + "\n".join(tbl) + "</pre>"]
-    idle = [s.name for b, s in low if not s.calls]
+        c = s.came
+        tbl.append(escape(f"{k:>2} {short_name(s.name, 10):<10} {b.talk_sec // 60:>3} {b.attempts:>4} "
+                          f"{b.dozvon:>4} " + (f"{c:%H:%M}" if c else "    —"), quote=False))
+    lines += ["", "<pre>" + "\n".join(tbl) + "</pre>",
+              "<i>Daq — gaplashgan daqiqa\nJami — qo'ng'iroqlar soni\n"
+              "Ulan — mijoz javob bergan qo'ng'iroqlar\nKeldi — ishga kelgan vaqti</i>"]
+    # Ishga kelgan (TimePay / Bitrix24 onlayn), lekin bugun bitta ham qo'ng'iroq qilmaganlar
+    idle = sorted((s for _, s in low if not s.calls), key=lambda s: s.came or h1)
     if idle:
-        lines.append(f"📵 Ishda (Bitrix24 da onlayn), lekin bugun hali birorta qo'ng'iroq qilmagan: "
-                     f"<b>{escape(', '.join(idle))}</b>")
-    lines.append("<i>Daq — gaplashgan daqiqa · Qo'ng — qo'ng'iroqlar soni · "
-                 "Keldi — bugun ishni boshlagan vaqt</i>")
+        lines += ["", f"📵 <b>Ishga kelgan, lekin bugun hali qo'ng'iroq qilmagan ({len(idle)}):</b>"]
+        for s in idle:
+            c = s.came
+            src = "Face ID" if s.tp_in else "Bitrix24"
+            when = f"{c:%H:%M} da keldi ({src})" if c else "keldi"
+            lines.append(f"• {escape(s.name)} — {when}")
     return "\n".join(lines)
