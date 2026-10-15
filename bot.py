@@ -61,7 +61,7 @@ def _save_present(d: date):
 async def job_online(context: ContextTypes.DEFAULT_TYPE):
     """Har 5 daqiqada: Bitrix24 da kim onlayn — shu bugun ishda deb hisoblanadi."""
     now = datetime.now(C.TZ)
-    if now.isoweekday() not in C.WORK_DAYS or not (C.WORK_START <= now.time() < C.WORK_END):
+    if now.isoweekday() not in C.WORK_DAYS or not (C.WORK_START <= now.time() < max(C.WORK_END, C.EXTRA_END or C.WORK_END)):
         return
     try:
         users = await bx.users(force=True)
@@ -345,9 +345,8 @@ async def cmd_yesterday(update, context, title, deps):
     msg = await wait_msg(update, context)
     d = datetime.now(C.TZ).date() - timedelta(days=1)
     day = await get_day(d)
-    end = datetime.combine(d, C.WORK_END, tzinfo=C.TZ)
     await msg.delete()
-    text = S.simple_report(day, S.team(day, deps), end, title, final=True) or "Kecha ma'lumot yo'q."
+    text = S.evening_report(day, S.team(day, deps), title) or "Kecha ma'lumot yo'q."
     ids = await send_long(context.bot, chat.id, text, None if _group(chat) else KB)
     remember(chat, ids)
 
@@ -630,17 +629,15 @@ async def job_report(context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         log.exception("Avto-hisobot: Bitrix'dan olib bo'lmadi")
         return
-    done = [i for i, sl in enumerate(day.slots) if sl.state(now) == "done"]
+    done = [i for i, sl in enumerate(day.slots) if sl.state(now) == "done" and sl.work]
     if not done:
         return
-    final = done[-1] == len(day.slots) - 1
     for cid, g in list(store.groups.items()):
         cid = int(cid)
         deps = set(g["deps"]) if g.get("deps") else None
         sel = S.team(day, deps)
-        # Oddiy: oxirgi 1 soatda eng kam gaplashganlar; ish kuni oxirida — butun kun bo'yicha ham
-        texts = [t for t in (S.simple_report(day, sel, now, g["title"]),
-                             S.simple_report(day, sel, now, g["title"], final=True) if final else None) if t]
+        # Oddiy: oxirgi 1 soatda eng kam gaplashganlar (kun yakuni — 21:00 da rahbarga alohida)
+        texts = [t for t in (S.simple_report(day, sel, now, g["title"]),) if t]
         if not texts:
             continue
         try:
@@ -657,17 +654,57 @@ async def job_report(context: ContextTypes.DEFAULT_TYPE):
             log.exception("Yuborib bo'lmadi: %s", cid)
 
 
+async def job_evening(context: ContextTypes.DEFAULT_TYPE):
+    """Har kuni EVENING_REPORT (21:00) da rahbarga (ADMIN_IDS) — bugun ishini qilmaganlar + tahlil."""
+    now = datetime.now(C.TZ)
+    if now.isoweekday() not in C.WORK_DAYS:
+        return
+    try:
+        day = await get_day(now.date(), force=True)
+    except Exception:
+        log.exception("Kunlik hisobot: Bitrix'dan olib bo'lmadi")
+        return
+    text = S.evening_report(day, S.team(day, None))
+    if not text:
+        return
+    for aid in C.ADMIN_IDS:
+        try:
+            await send_long(context.bot, aid, text)
+        except Exception:
+            log.exception("Kunlik hisobot rahbarga yuborilmadi: %s", aid)
+
+
+@admin_only
+async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/kunlik — bugungi kunlik hisobotni hozir ko'rish (21:00 dagi kabi)."""
+    msg = await update.effective_message.reply_text("⏳ Bitrix24 dan olinmoqda...")
+    day = await get_day(datetime.now(C.TZ).date(), force=True)
+    await msg.delete()
+    await send_long(context.bot, update.effective_chat.id,
+                    S.evening_report(day, S.team(day, None)) or "Bugun hali ma'lumot yo'q.")
+
+
+def _in_lunch(t) -> bool:
+    return bool(C.LUNCH_START and C.LUNCH_END and C.LUNCH_START < t <= C.LUNCH_END)
+
+
 def schedule(app: Application):
     days = tuple(sorted(d % 7 for d in C.WORK_DAYS))   # PTB: 0=yakshanba
-    slots = S.day_slots(datetime.now(C.TZ).date())
+    slots = [sl for sl in S.day_slots(datetime.now(C.TZ).date()) if not sl.extra]
+    times = []
     for k, sl in enumerate(slots):
         since = int((sl.end - slots[0].start).total_seconds() // 60)
-        # faqat har REPORT_EVERY_MIN daqiqada (masalan 10:00, 11:00, ...) va ish kuni oxirida
+        # faqat har REPORT_EVERY_MIN daqiqada (10:00, 11:00, ...) va ish vaqti oxirida (18:00)
         if since % C.REPORT_EVERY_MIN and k != len(slots) - 1:
             continue
-        t = (sl.end + timedelta(minutes=C.REPORT_DELAY_MIN)).timetz()
-        app.job_queue.run_daily(job_report, time=t, days=days)
-    log.info("Avto-hisobot: har %s daqiqada, %s–%s", C.REPORT_EVERY_MIN, C.WORK_START, C.WORK_END)
+        t = sl.end + timedelta(minutes=C.REPORT_DELAY_MIN)
+        if _in_lunch(t.time()):        # tushlikda bezovta qilinmaydi
+            continue
+        times.append(f"{t:%H:%M}")
+        app.job_queue.run_daily(job_report, time=t.timetz(), days=days)
+    if C.EVENING_REPORT and C.ADMIN_IDS:
+        app.job_queue.run_daily(job_evening, time=C.EVENING_REPORT.replace(tzinfo=C.TZ), days=days)
+    log.info("Guruhlarga hisobot: %s · rahbarga kunlik: %s", ", ".join(times), C.EVENING_REPORT)
 
 
 async def post_init(app: Application):
@@ -675,6 +712,7 @@ async def post_init(app: Application):
         BotCommand("holat", "Hozirgi holat"),
         BotCommand("sotuvchi", "Bitta sotuvchi + qo'ng'iroqlar ro'yxati"),
         BotCommand("kecha", "Kechagi yakuniy hisobot"),
+        BotCommand("kunlik", "Bugungi kunlik hisobot — rahbar uchun (admin)"),
         BotCommand("ulash", "Guruhni jamoaga ulash (admin)"),
         BotCommand("uzish", "Guruhni uzish (admin)"),
         BotCommand("guruhlar", "Ulangan guruhlar (admin)"),
@@ -698,6 +736,7 @@ def main():
     add(CommandHandler("id", cmd_id))
     add(CommandHandler("holat", cmd_status))
     add(CommandHandler("kecha", cmd_yesterday))
+    add(CommandHandler("kunlik", cmd_daily))
     add(CommandHandler("sotuvchi", cmd_sellers))
     add(CommandHandler("ulash", cmd_bind))
     add(CommandHandler("uzish", cmd_unbind))
