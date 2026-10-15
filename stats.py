@@ -199,6 +199,9 @@ async def build_day(bx, d: date, member_deps: set[int]) -> DayData:
     def is_seller(uid: int) -> bool:
         if uid in skip:
             return False
+        u = users.get(uid)
+        if u is None or not _active(u):   # ishdan bo'shatilgan (aktiv emas) xodim
+            return False
         if not sales:            # bo'limlar o'qilmasa — hammasi (eski xatti-harakat)
             return True
         return bool(_udeps(users.get(uid)) & sales)
@@ -210,11 +213,8 @@ async def build_day(bx, d: date, member_deps: set[int]) -> DayData:
                                           team=team_name(_udeps(u), sales, deps_all))
         return data.sellers[uid]
 
-    # Ulangan jamoalarning a'zolari — bugun qo'ng'iroq qilmagan bo'lsa ham chiqadi
-    for uid, u in users.items():
-        if is_seller(uid) and _active(u) and _udeps(u) & member_deps:
-            get(uid)
-
+    # Faqat bugun ish vaqtida kamida 1 ta qo'ng'iroq qilgan, Bitrix24 da AKTIV sotuvchilar olinadi.
+    # Ishdan ketgan / bugun ishlamagan (qo'ng'iroq qilmagan) xodimlar hisobotga kirmaydi.
     first = slots[0].start
     for c in calls:
         try:
@@ -463,16 +463,20 @@ def hour_report(day: DayData, sellers: list[SellerDay], now: datetime, title: st
         b = total(s.buckets[i] for i in hidx)
         rows.append((grade(b, f) or LIVE, s, b))
     rows.sort(key=lambda x: (RANK.get(x[0], 9), -x[2].talk_sec))
+    reds_all = [r for r in rows if r[0] == C.LOW[0]]
+    if not reds_all:
+        lines += ["", f"✅ Shu vaqtda hamma normada ({len(rows)} sotuvchi)."]
+        return "\n".join(lines)
+    lines += ["", f"🔴 Normadan past: <b>{len(reds_all)} / {len(rows)} sotuvchi</b>"]
     teams: dict[str, list] = {}
-    for r in rows:
+    for r in reds_all:
         teams.setdefault(r[1].team or "Boshqa", []).append(r)
     for tname, trs in sorted(teams.items()):
-        c = Counter(r[0] for r in trs)
-        marks = " ".join(f"{e}{c[e]}" for e in (C.LEVELS[0][0], C.LEVELS[1][0], C.LOW[0]) if c[e])
+        trs.sort(key=lambda x: x[2].talk_sec)
         tbl = [TABLE_HEAD + " Sotuvchi"]
         for n, (g, s, b) in enumerate(trs, 1):
             tbl.append(f"{table_row(g, n, b)} {escape(s.name, quote=False)}")
-        lines += ["", f"👥 <b>{escape(tname.upper())}</b> · {marks}", "<pre>" + "\n".join(tbl) + "</pre>"]
+        lines += ["", f"👥 <b>{escape(tname.upper())}</b> · 🔴 {len(trs)}", "<pre>" + "\n".join(tbl) + "</pre>"]
         zero = [r[1].name for r in trs if r[2].attempts == 0]
         if zero:
             lines.append(f"📵 Shu vaqtda umuman qo'ng'iroq qilmagan: <b>{escape(', '.join(zero))}</b>")
@@ -528,29 +532,28 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
     order_teams = sorted(teams.items(), key=lambda kv: -avg_talk(kv[1]))
     G, Y, R = C.LEVELS[0][0], C.LEVELS[1][0], C.LOW[0]
 
-    # ---------- 1. Har bir ROP jamoasi alohida ----------
-    head = TABLE_HEAD + " Norma Sotuvchi"
-    for tname, trs in order_teams:
-        c = Counter(r[0] for r in trs)
-        marks = " ".join(f"{e}{c[e]}" for e in (G, Y, R, LIVE) if c[e])
-        lines += ["", LINE, f"👥 <b>{escape(tname.upper())}</b> · {len(trs)} sotuvchi · {marks}"]
-        tbl = [head]
-        for n, (g, s, tot, pct) in enumerate(trs, 1):
-            tbl.append(f"{table_row(g, n, tot)} {_pct(pct):>5} {escape(s.name, quote=False)}")
-        lines.append("<pre>" + "\n".join(tbl) + "</pre>")
-        tt = total(r[2] for r in trs)
-        lines.append(f"📌 Jamoa jami: 🗣 {tt.talk_sec // 60} daq · 📞 {tt.attempts} ta · ✅ {tt.dozvon} ulandi")
-        lines.append(f"📌 1 sotuvchiga o'rtacha: <b>{int(avg_talk(trs)) // 60} daqiqa</b> gaplashuv")
-
-    # ---------- 2. Jamoalar reytingi ----------
-    if len(order_teams) > 1:
-        lines += ["", LINE, "🏆 <b>JAMOALAR REYTINGI</b> (1 sotuvchiga o'rtacha gaplashuv):"]
-        medals = ["🥇", "🥈", "🥉"]
-        for k, (tname, trs) in enumerate(order_teams):
-            ok = sum(1 for r in trs if r[0] in (G, Y))
-            m = medals[k] if k < 3 else f"{k + 1}."
-            lines.append(f"{m} <b>{escape(tname)}</b> — {fmt_dur(int(avg_talk(trs)))} · "
-                         f"normada {ok}/{len(trs)} kishi")
+    # ---------- 1. Faqat normadan pastlar (🔴) — har bir ROP jamoasi alohida ----------
+    bad_rows = [r for r in rows if r[0] == R]
+    if fdone <= 0:
+        lines += ["", f"👥 Bugun ishlayotgan: <b>{len(rows)} sotuvchi</b>",
+                  "⏳ Birinchi 30 daqiqa tugagach baholanadi."]
+    elif not bad_rows:
+        lines += ["", f"👥 Bugun ishlayotgan: <b>{len(rows)} sotuvchi</b>",
+                  "✅ <b>Normadan past sotuvchi yo'q.</b> Barakalla!"]
+    else:
+        lines += ["", f"👥 Bugun ishlayotgan: <b>{len(rows)} sotuvchi</b> · "
+                      f"🔴 normadan past: <b>{len(bad_rows)} kishi</b>"]
+        head = TABLE_HEAD + " Norma Sotuvchi"
+        for tname, trs in order_teams:
+            reds = [r for r in trs if r[0] == R]
+            if not reds:
+                continue
+            reds.sort(key=lambda x: x[2].talk_sec)   # eng kami tepada
+            lines += ["", LINE, f"👥 <b>{escape(tname.upper())}</b> · 🔴 {len(reds)} / {len(trs)} sotuvchi"]
+            tbl = [head]
+            for n, (g, s, tot, pct) in enumerate(reds, 1):
+                tbl.append(f"{table_row(g, n, tot)} {_pct(pct):>5} {escape(s.name, quote=False)}")
+            lines.append("<pre>" + "\n".join(tbl) + "</pre>")
 
     # ---------- 3. 1 mijoz bilan uzoq suhbat ----------
     if flags is None:   # yakuniy hisobotda — hammasi
@@ -565,23 +568,20 @@ def status_report(day: DayData, sellers: list[SellerDay], now: datetime, title: 
         if len(flags) > 5:
             lines.append(f"  … yana {len(flags) - 5} ta")
 
-    # ---------- 4. Eng past natija (e'lon) ----------
+    # ---------- 4. Eng pastlar — nega past (sabablari) ----------
     bad = sorted([(s, t) for g, s, t, _ in rows if g == R], key=lambda x: x[1].talk_sec)
-    limit = 5 if final else 3
-    lines += ["", LINE]
+    limit = 10 if final else 5
     if bad and fdone > 0:
-        lines.append(f"🔻 <b>ENG PAST NATIJA</b> — {len(bad)} kishidan {min(limit, len(bad))} tasi:")
+        lines += ["", LINE, f"🔻 <b>ENG PAST NATIJA — SABABLARI</b> ({min(limit, len(bad))} kishi):"]
         for k, (s, t) in enumerate(bad[:limit], 1):
             team = f" · <i>{escape(s.team)}</i>" if s.team and len(order_teams) > 1 else ""
             lines += ["", f"{k}. 🔴 <b>{escape(s.name)}</b>{team}"]
             lines += [f"    • {r}" for r in reasons(day, s, done, fdone, upto)]
-    elif fdone > 0:
-        lines.append("✅ <b>Normadan past sotuvchi yo'q.</b> Barakalla!")
-    else:
-        lines.append("⏳ Birinchi 30 daqiqa tugagach baholanadi.")
 
     # ---------- 5. Izoh (eng pastda) ----------
     lines += ["", LINE] + norm_legend() + ["", LINE] + columns_legend(with_norm=True)
+    lines += ["", "<i>ℹ️ Hisobotda faqat normadan pastlar ko'rsatiladi. Bugun birorta ham qo'ng'iroq "
+              "qilmagan va Bitrix24 da aktiv bo'lmagan xodimlar hisobga olinmaydi.</i>"]
     every = "1 soatda" if C.REPORT_EVERY_MIN == 60 else f"{C.REPORT_EVERY_MIN} daqiqada"
     lines += ["", f"<i>🔄 Hisobot har {every} o'zi keladi: 📊 bugungi holat + ⏱ oxirgi 1 soat.</i>"]
     return "\n".join(lines)
