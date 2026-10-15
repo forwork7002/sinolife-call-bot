@@ -37,9 +37,13 @@ PORTAL_URL = f"{_u.scheme}://{_u.netloc}"
 
 TZ = ZoneInfo(os.getenv("TZ_NAME", "Asia/Tashkent"))
 WORK_START = _hm("WORK_START", "09:00")
-WORK_END = _hm("WORK_END", "22:00")
+WORK_END = _hm("WORK_END", "18:00")      # rasmiy ish vaqti tugashi — norma shu vaqtgacha
 LUNCH_START = _hm("LUNCH_START", None)   # bo'sh = tushlik yo'q
 LUNCH_END = _hm("LUNCH_END", None)
+# Ish vaqtidan keyin ham qo'ng'iroqlar shu vaqtgacha hisoblanadi (baholanmaydi — "faxrli xodimlar")
+EXTRA_END = _hm("EXTRA_END", "22:00")
+# Rahbarga kunlik yakuniy hisobot (shaxsiy chatga, ADMIN_IDS)
+EVENING_REPORT = _hm("EVENING_REPORT", "21:00")
 WORK_DAYS = {int(x) for x in os.getenv("WORK_DAYS", "1,2,3,4,5,6").split(",") if x}  # 1=dush ... 7=yaksh
 
 ADMIN_IDS = _ids("ADMIN_IDS")            # rahbar(lar)ning Telegram ID si
