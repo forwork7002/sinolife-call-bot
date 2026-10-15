@@ -20,6 +20,7 @@ import config as C
 import stats as S
 from bitrix import Bitrix, BitrixError
 from store import Store
+import timepay as TPM
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 for n in ("httpx", "apscheduler"):
@@ -27,6 +28,8 @@ for n in ("httpx", "apscheduler"):
 log = logging.getLogger("bot")
 
 bx = Bitrix(C.BITRIX_WEBHOOK)
+tp = TPM.TimePay(C.TIMEPAY_LOGIN, C.TIMEPAY_PASSWORD, C.TIMEPAY_LOGIN_FIELD)
+_tp_map: dict[int, int | None] = {}     # TimePay xodim ID -> Bitrix ID
 store = Store(C.STATE_FILE)
 S.EXCLUDED.update(store.excluded_ids())
 _cache: dict[date, tuple[float, S.DayData]] = {}
@@ -76,6 +79,36 @@ async def job_online(context: ContextTypes.DEFAULT_TYPE):
             new += 1
     if new:
         _save_present(d)
+    if tp.enabled:
+        try:
+            await sync_timepay(d, users)
+        except Exception as e:
+            log.warning("TimePay: %s", e)
+
+
+async def sync_timepay(d: date, users: dict) -> tuple[int, int, int]:
+    """TimePay dan bugun kim soat nechada kelgan/ketganini oladi va Bitrix24 xodimiga moslaydi.
+    Qaytaradi: (TimePay dagi xodimlar, bugun kelganlar, Bitrix24 ga moslanganlar)."""
+    att = await tp.daily_attendance(d)
+    emps = await tp.employees(d)
+    out: dict[int, tuple] = {}
+    came = 0
+    for it in att:
+        st = it.get("stats") or {}
+        t_in = TPM.parse_time(st.get("first_check_in"), d, C.TZ)
+        if not t_in:
+            continue
+        came += 1
+        tid = int(it.get("id") or 0)
+        if tid not in _tp_map:
+            _tp_map[tid] = TPM.match_bitrix(emps.get(tid, {}), it, users, S._active)
+        uid = _tp_map[tid]
+        if uid:
+            out[uid] = (t_in, TPM.parse_time(st.get("last_check_out"), d, C.TZ))
+    S.TP[d] = out
+    for k in [k for k in S.TP if k != d]:
+        del S.TP[k]
+    return len(att), came, len(out)
 
 KB = ReplyKeyboardMarkup([["📊 Holat", "👤 Sotuvchi"], ["📅 Kecha"]], resize_keyboard=True)
 
@@ -499,6 +532,16 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text(await check_text())
 
 
+async def timepay_line(users: dict) -> str:
+    if not tp.enabled:
+        return "TimePay: ulanmagan (.env ga TIMEPAY_LOGIN va TIMEPAY_PASSWORD yozing)"
+    try:
+        n, came, matched = await sync_timepay(datetime.now(C.TZ).date(), users)
+        return f"✅ TimePay: {n} xodim · bugun kelgan: {came} · Bitrix24 ga moslangan: {matched}"
+    except Exception as e:
+        return f"❌ TimePay: {e}"
+
+
 async def check_text() -> str:
     lines = []
     try:
@@ -525,6 +568,7 @@ async def check_text() -> str:
               (f"Hisobotga kirmaydigan rahbarlar (ROP): {len(heads)} — {hn}" if C.EXCLUDE_HEADS and heads
                else "Rahbarlar (ROP) aniqlanmadi — /chiqarish orqali qo'lda olib tashlang"),
               f"Bugungi qo'ng'iroqlar: {len(calls)} (ulangan: {ok})",
+              await timepay_line(users),
               f"Ulangan guruhlar: {len(store.groups)}"]
     if calls:
         rec = any(c.get("CALL_RECORD_URL") for c in calls)
